@@ -1,0 +1,10 @@
+# your personal data (CV, profile, applications) — never commit
+data/
+*.db
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.streamlit/secrets.toml

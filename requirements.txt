@@ -1,0 +1,8 @@
+streamlit>=1.40
+ollama>=0.4
+pypdf>=5.0
+langdetect>=1.0.9
+python-docx>=1.1
+reportlab>=4.0
+pandas>=2.0
+pytest>=8.0
