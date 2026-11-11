@@ -1,4 +1,4 @@
-# 🎯 CV ↔ Job Matcher
+# 🎯 AI - CV ↔ Job Matcher
 
 A local AI tool that compares your CV with a job description, gives you a **match score out of 5**
 and, when the score is **above 3.5**, writes a tailored **cover letter** in the language of the job ad.
