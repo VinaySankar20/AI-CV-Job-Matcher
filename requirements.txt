@@ -1,5 +1,13 @@
 streamlit>=1.40
-ollama>=0.4
+langgraph>=1.2,<2
+langgraph-checkpoint-sqlite>=3.1,<4
+langchain-core>=1.8,<2
+langchain-ollama>=1.1,<2
+langchain-openai>=1.7,<2
+langchain-anthropic>=1.7,<2
+python-dotenv>=1.0
+ollama>=0.6
+pydantic>=2.7
 pypdf>=5.0
 langdetect>=1.0.9
 python-docx>=1.1

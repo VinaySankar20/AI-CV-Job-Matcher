@@ -5,8 +5,7 @@ import re
 from datetime import date
 from typing import Any
 
-from . import prompts
-from .llm import LLM
+from .llm import Models
 from .textutils import keyword_in_text, normalize
 
 LENGTHS = {
@@ -72,37 +71,42 @@ def _german_rule(level: str | None) -> str:
     return "the German level is unknown — do not mention a German level."
 
 
-def generate_cover_letter(llm: LLM, cv_text: str, jd_text: str, analysis: dict[str, Any],
-                          profile: dict[str, Any], tone: str = "formal", length: str = "standard",
-                          extra_instructions: str = "") -> dict[str, Any]:
+def letter_inputs(cv_text: str, jd_text: str, analysis: dict[str, Any], profile: dict[str, Any],
+                  tone: str = "formal", length: str = "standard", extra_instructions: str = "") -> dict[str, Any]:
+    """All placeholder values for the cover letter prompt (see prompts.COVER_USER)."""
     lang = analysis["germany"]["job_language"]
     language = "German" if lang == "de" else "English"
     words, paragraphs = LENGTHS.get(length, LENGTHS["standard"])
-    contact = analysis["job"].get("contact_person", "")
+    availability = str(profile.get("availability") or "").strip()
+    reqs = analysis.get("requirements", [])
+    extra = extra_instructions.strip()
+    return {
+        "language": language,
+        "tone_text": TONES.get(tone, TONES["formal"])[lang],
+        "words": words,
+        "paragraphs": paragraphs,
+        "availability_rule": (f"mention the candidate's availability exactly as: \"{availability}\"." if availability
+                              else "do NOT mention availability, start dates or notice periods."),
+        "do_not_claim": ", ".join(not_in_cv_terms(analysis, cv_text)) or "(none)",
+        "education": "; ".join(sorted(set(_education_lines(cv_text)))) or "see CV",
+        "german_rule": _german_rule(analysis["germany"].get("candidate_german_level")),
+        "matches": "\n".join(f"- {r['name']} → {r['evidence']}" for r in reqs
+                             if r["status"] in ("met", "partial") and r.get("evidence")) or "- (none)",
+        "salutation_hint": salutation_hint(lang, tone, analysis["job"].get("contact_person", "")),
+        "closing": default_closing(lang, tone),
+        "extra": f"Extra instructions from the candidate (follow them): {extra}" if extra else "",
+        "jd": jd_text[:10000],
+        "strengths": "; ".join(analysis.get("strengths", [])),
+        "cv": cv_text[:10000],
+    }
+
+
+def clean_letter(data: dict[str, Any], analysis: dict[str, Any], profile: dict[str, Any],
+                 tone: str = "formal") -> dict[str, Any]:
+    """Tidy the model's letter: no name in the closing, no closing formula inside the body."""
+    lang = analysis["germany"]["job_language"]
     closing = default_closing(lang, tone)
     name = str(profile.get("full_name") or "").strip()
-    availability = str(profile.get("availability") or "").strip()
-    availability_rule = (f"mention the candidate's availability exactly as: \"{availability}\"." if availability
-                         else "do NOT mention availability, start dates or notice periods.")
-    reqs = analysis.get("requirements", [])
-    matches = "\n".join(f"- {r['name']} → {r['evidence']}" for r in reqs
-                        if r["status"] in ("met", "partial") and r.get("evidence")) or "- (none)"
-    education = "; ".join(sorted({ln for ln in (_education_lines(cv_text))})) or "see CV"
-    extra = f"Extra instructions from the candidate (follow them): {extra_instructions.strip()}" \
-        if extra_instructions.strip() else ""
-
-    data = llm.chat_json(
-        prompts.COVER_SYSTEM.format(language=language),
-        prompts.COVER_USER.format(
-            language=language, tone_text=TONES.get(tone, TONES["formal"])[lang], words=words,
-            paragraphs=paragraphs, availability_rule=availability_rule,
-            do_not_claim=", ".join(not_in_cv_terms(analysis, cv_text)) or "(none)",
-            education=education, german_rule=_german_rule(analysis["germany"].get("candidate_german_level")),
-            matches=matches, salutation_hint=salutation_hint(lang, tone, contact), closing=closing, extra=extra,
-            jd=jd_text[:10000], strengths="; ".join(analysis.get("strengths", [])), cv=cv_text[:10000]),
-        schema=prompts.COVER_SCHEMA,
-        temperature=0.5,
-    )
     paras = [str(p).strip() for p in (data.get("paragraphs") or []) if str(p).strip()]
     if paras:
         paras[-1] = _strip_name(paras[-1], name) or paras[-1]
@@ -116,6 +120,17 @@ def generate_cover_letter(llm: LLM, cv_text: str, jd_text: str, analysis: dict[s
         "paragraphs": paras,
         "closing": _clean_closing(str(data.get("closing") or ""), name, closing),
     }
+
+
+def generate_cover_letter(models: Models, cv_text: str, jd_text: str, analysis: dict[str, Any],
+                          profile: dict[str, Any], tone: str = "formal", length: str = "standard",
+                          extra_instructions: str = "") -> dict[str, Any]:
+    """One letter, no fix loop (the graph in graph.py adds the fact-check-and-rewrite loop)."""
+    from .chains import cover_letter_chain
+
+    result = cover_letter_chain(models).invoke(
+        letter_inputs(cv_text, jd_text, analysis, profile, tone, length, extra_instructions))
+    return clean_letter(result.model_dump(), analysis, profile, tone)
 
 
 # --------------------------------------------------------------------------- fact check
@@ -157,6 +172,12 @@ def not_in_cv_terms(analysis: dict[str, Any], cv_text: str) -> list[str]:
     return out
 
 
+_LEARNING = re.compile(
+    r"\b(?:learn\w*|eager|keen|look(?:ing)? forward|familiari[sz]e\w*|get up to speed|pick up|not yet|"
+    r"new to|have not|haven't|no (?:prior|hands-on|direct)|deepen|expand|grow into|"
+    r"lernen|erlernen|einarbeiten|einzuarbeiten|aneignen|anzueignen|vertiefen|noch nicht|"
+    r"keine (?:erfahrung|kenntnisse)|freue mich darauf)\b", re.I)
+
 _NUMBER_WORDS = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7",
                  "eight": "8", "nine": "9", "ten": "10", "ein": "1", "zwei": "2", "drei": "3", "vier": "4",
                  "fünf": "5", "sechs": "6", "sieben": "7", "acht": "8", "neun": "9", "zehn": "10"}
@@ -170,8 +191,13 @@ def fact_check(letter: dict[str, Any], cv_text: str, analysis: dict[str, Any],
     warnings: list[str] = []
 
     flagged: list[str] = []
+    sentences = [normalize(x) for x in re.split(r"(?<=[.!?])\s+", body)]
     for term in sorted(not_in_cv_terms(analysis, cv_text), key=len):
-        if keyword_in_text(term, body_norm) and not any(f.lower() in term.lower() for f in flagged):
+        if not keyword_in_text(term, body_norm) or any(f.lower() in term.lower() for f in flagged):
+            continue
+        # "keen to learn Jenkins" is honest; only flag sentences that present it as experience
+        claimed = [x for x in sentences if keyword_in_text(term, x) and not _LEARNING.search(x)]
+        if claimed:
             flagged.append(term)
             warnings.append(f"Mentions **{term}**, which is not in your CV — make sure it's not claimed as experience.")
 

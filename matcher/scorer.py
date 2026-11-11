@@ -8,17 +8,18 @@ Final score (0-5) = weighted categories − penalty for missing must-haves, wher
   keywords   = share of ATS keywords from the ad that literally appear in the CV
 AI "met" claims are cross-checked: if the quoted evidence isn't in the CV and neither
 keywords nor embeddings support it, the requirement is downgraded to "partial".
+
+This module is pure Python (no LLM calls): the LangGraph nodes in graph.py call the model
+and hand the answers to the functions here.
 """
 from __future__ import annotations
 
 import re
-from typing import Any, Callable
+from typing import Any
 
-from . import config, germany, prompts
-from .llm import LLM
+from . import config
+from .llm import Models
 from .textutils import chunk_cv, cosine, evidence_in_text, keyword_coverage, keyword_in_text, normalize
-
-Progress = Callable[[str], None]
 
 STATUS_VALUE = {"met": 1.0, "partial": 0.5, "missing": 0.0}
 
@@ -100,9 +101,8 @@ def _keyword_line(req_name: str, cv_text: str) -> str:
     return ""
 
 
-def extract_requirements(llm: LLM, jd_text: str) -> dict[str, Any]:
-    data = llm.chat_json(prompts.EXTRACT_SYSTEM, prompts.EXTRACT_USER.format(jd=jd_text[:12000]),
-                         schema=prompts.EXTRACT_SCHEMA)
+def normalize_job(data: dict[str, Any]) -> dict[str, Any]:
+    """Clean the model's job extraction: give ids, drop near-duplicates, cap list sizes."""
     reqs: list[dict[str, Any]] = []
     for kind, prefix, limit in (("must_have", "M", 12), ("nice_to_have", "N", 10)):
         for i, item in enumerate((data.get(kind) or [])[:limit], start=1):
@@ -123,12 +123,28 @@ def extract_requirements(llm: LLM, jd_text: str) -> dict[str, Any]:
     }
 
 
-def _semantic_similarities(llm: LLM, cv_text: str, reqs: list[dict]) -> list[float] | None:
+def requirement_lines(reqs: list[dict[str, Any]]) -> str:
+    return "\n".join(f"{r['id']} [{r['type']}, {r['category']}]: {r['name']}" for r in reqs) or "(none found)"
+
+
+def collect_verdicts(items: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    """id -> verdict, keeping only valid statuses."""
+    return {str(v.get("id")): v for v in (items or [])
+            if isinstance(v, dict) and v.get("status") in STATUS_VALUE}
+
+
+def skipped_requirements(reqs: list[dict[str, Any]], verdicts: dict[str, Any]) -> list[dict[str, Any]]:
+    """Requirements the model gave no verdict for (small models often skip the nice-to-haves)."""
+    return [r for r in reqs if r["id"] not in verdicts]
+
+
+def semantic_similarities(models: Models, cv_text: str, reqs: list[dict]) -> list[float] | None:
+    """Best cosine similarity between each requirement and any chunk of the CV (None if no embeddings)."""
     chunks = chunk_cv(cv_text)
     if not chunks or not reqs:
         return None
-    req_vecs = llm.embed([f"search_query: {r['name']}" for r in reqs])
-    cv_vecs = llm.embed([f"search_document: {c}" for c in chunks])
+    req_vecs = models.embed([f"search_query: {r['name']}" for r in reqs])
+    cv_vecs = models.embed([f"search_document: {c}" for c in chunks])
     if not req_vecs or not cv_vecs:
         return None
     return [max(cosine(rv, cv) for cv in cv_vecs) for rv in req_vecs]
@@ -138,49 +154,13 @@ def _sim_to_unit(sim: float) -> float:
     return max(0.0, min(1.0, (sim - config.SIM_LOW) / (config.SIM_HIGH - config.SIM_LOW)))
 
 
-def analyse(llm: LLM, cv_text: str, jd_text: str, profile: dict[str, Any] | None = None,
-            weights: dict[str, float] | None = None, progress: Progress | None = None) -> dict[str, Any]:
-    profile = profile or {}
+def build_analysis(job: dict[str, Any], verdicts: dict[str, dict[str, Any]], evaluation: dict[str, Any],
+                   sims: list[float] | None, de: dict[str, Any], cv_text: str,
+                   weights: dict[str, float] | None = None) -> dict[str, Any]:
+    """Combine the model's answers with the rule-based checks into the final scored analysis."""
     weights = weights or config.DEFAULT_WEIGHTS
-    say = progress or (lambda _msg: None)
-
-    say("Reading the job description …")
-    job = extract_requirements(llm, jd_text)
-    reqs = job["requirements"]
-
-    say("Running Germany-specific checks …")
-    de = germany.run_checks(jd_text, cv_text, profile)
-
-    say("Comparing your CV with each requirement …")
-    req_lines = "\n".join(f"{r['id']} [{r['type']}, {r['category']}]: {r['name']}" for r in reqs) or "(none found)"
-    ev = llm.chat_json(
-        prompts.EVALUATE_SYSTEM,
-        prompts.EVALUATE_USER.format(years=job["min_years_experience"], title=job["job_title"] or "the role",
-                                     company=job["company"] or "the company", requirements=req_lines,
-                                     cv=cv_text[:12000]),
-        schema=prompts.EVALUATE_SCHEMA,
-    )
-
-    verdicts = {str(v.get("id")): v for v in (ev.get("requirements") or []) if isinstance(v, dict)}
-    skipped = [r for r in reqs if verdicts.get(r["id"], {}).get("status") not in STATUS_VALUE]
-    if skipped:  # small models often skip items — ask again for just those
-        say(f"Re-checking {len(skipped)} requirement(s) the AI skipped …")
-        try:
-            ev2 = llm.chat_json(
-                prompts.EVALUATE_SYSTEM,
-                prompts.RECHECK_USER.format(
-                    requirements="\n".join(f"{r['id']} [{r['type']}, {r['category']}]: {r['name']}" for r in skipped),
-                    cv=cv_text[:12000]),
-                schema=prompts.RECHECK_SCHEMA,
-            )
-            for v in ev2.get("requirements") or []:
-                if isinstance(v, dict) and v.get("status") in STATUS_VALUE:
-                    verdicts[str(v.get("id"))] = v
-        except Exception:
-            pass  # fall back to the rule-based checks below
-
-    say("Checking semantic similarity (embeddings) …")
-    sims = _semantic_similarities(llm, cv_text, reqs)
+    reqs = [dict(r) for r in job["requirements"]]
+    ev = evaluation
     cv_norm = normalize(cv_text)
 
     # ---- merge AI verdicts with degree / keyword / embedding / evidence checks

@@ -1,4 +1,8 @@
-"""All prompts and JSON schemas in one place, so they are easy to tune."""
+"""All prompt texts in one place, so they are easy to tune.
+
+The {placeholders} are filled by LangChain prompt templates (see chains.py); the shape of
+each answer is defined by the Pydantic models in schemas.py.
+"""
 
 # ---------------------------------------------------------------- 1. read the job ad
 EXTRACT_SYSTEM = """You are an expert recruiter in Germany. You read job descriptions (German or English)
@@ -23,31 +27,6 @@ JOB DESCRIPTION:
 \"\"\"
 {jd}
 \"\"\""""
-
-_REQ_ITEM = {
-    "type": "object",
-    "properties": {
-        "name": {"type": "string"},
-        "category": {"type": "string", "enum": ["skill", "experience", "education", "language", "other"]},
-    },
-    "required": ["name", "category"],
-}
-
-EXTRACT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "job_title": {"type": "string"},
-        "company": {"type": "string"},
-        "location": {"type": "string"},
-        "contact_person": {"type": "string"},
-        "must_have": {"type": "array", "items": _REQ_ITEM},
-        "nice_to_have": {"type": "array", "items": _REQ_ITEM},
-        "keywords": {"type": "array", "items": {"type": "string"}},
-        "min_years_experience": {"type": "number"},
-    },
-    "required": ["job_title", "company", "location", "contact_person", "must_have",
-                 "nice_to_have", "keywords", "min_years_experience"],
-}
 
 # ---------------------------------------------------------------- 2. compare CV to requirements
 EVALUATE_SYSTEM = """You are a strict but fair recruiter in Germany. You compare a candidate's CV with a
@@ -86,39 +65,6 @@ CV:
 {cv}
 \"\"\""""
 
-_SCORE = {
-    "type": "object",
-    "properties": {"score": {"type": "number"}, "reason": {"type": "string"}},
-    "required": ["score", "reason"],
-}
-
-EVALUATE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "requirements": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string"},
-                    "status": {"type": "string", "enum": ["met", "partial", "missing"]},
-                    "evidence": {"type": "string"},
-                },
-                "required": ["id", "status", "evidence"],
-            },
-        },
-        "scores": {
-            "type": "object",
-            "properties": {"skills": _SCORE, "experience": _SCORE, "education": _SCORE, "languages": _SCORE},
-            "required": ["skills", "experience", "education", "languages"],
-        },
-        "strengths": {"type": "array", "items": {"type": "string"}},
-        "gaps": {"type": "array", "items": {"type": "string"}},
-        "cv_tips": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["requirements", "scores", "strengths", "gaps", "cv_tips"],
-}
-
 RECHECK_USER = """For EACH requirement id below, decide if the CV shows it:
 "met" (clearly shown), "partial" (related or weaker) or "missing" (nothing supports it),
 and copy the supporting text word-for-word from the CV into "evidence" ("" if missing).
@@ -131,12 +77,6 @@ CV:
 \"\"\"
 {cv}
 \"\"\""""
-
-RECHECK_SCHEMA = {
-    "type": "object",
-    "properties": {"requirements": EVALUATE_SCHEMA["properties"]["requirements"]},
-    "required": ["requirements"],
-}
 
 # ---------------------------------------------------------------- 3. CV tailoring
 TAILOR_SYSTEM = """You are a CV coach for the German job market. You rewrite existing CV bullet points so
@@ -160,26 +100,6 @@ CV:
 \"\"\"
 {cv}
 \"\"\""""
-
-TAILOR_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "suggestions": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "original": {"type": "string"},
-                    "suggested": {"type": "string"},
-                    "why": {"type": "string"},
-                    "needs_confirmation": {"type": "boolean"},
-                },
-                "required": ["original", "suggested", "why", "needs_confirmation"],
-            },
-        }
-    },
-    "required": ["suggestions"],
-}
 
 # ---------------------------------------------------------------- 4. cover letter
 COVER_SYSTEM = """You write cover letters (Anschreiben) for the German job market. You write in {language}.
@@ -227,14 +147,3 @@ CV:
 \"\"\"
 {cv}
 \"\"\""""
-
-COVER_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "subject": {"type": "string"},
-        "salutation": {"type": "string"},
-        "paragraphs": {"type": "array", "items": {"type": "string"}},
-        "closing": {"type": "string"},
-    },
-    "required": ["subject", "salutation", "paragraphs", "closing"],
-}

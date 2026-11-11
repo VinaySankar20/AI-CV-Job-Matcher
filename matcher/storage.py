@@ -70,6 +70,17 @@ class Storage:
             c.execute("INSERT INTO settings(key, value) VALUES('profile', ?) "
                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(merged),))
 
+    # ---------------- other settings (model choice, cloud consent …)
+    def get_setting(self, key: str, default: Any = None) -> Any:
+        with self._conn() as c:
+            row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return json.loads(row["value"]) if row else default
+
+    def set_setting(self, key: str, value: Any) -> None:
+        with self._conn() as c:
+            c.execute("INSERT INTO settings(key, value) VALUES(?, ?) "
+                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, json.dumps(value)))
+
     # ---------------- CV
     def save_cv(self, filename: str, text: str) -> int:
         with self._conn() as c:

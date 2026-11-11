@@ -8,6 +8,15 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("CVM_DATA_DIR", PROJECT_DIR / "data"))
 DB_PATH = DATA_DIR / "cv_matcher.db"
 
+# API keys for cloud providers are read from a local ".env" file in the project folder
+# (git-ignored). Values already set in the environment win over the file.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(PROJECT_DIR / ".env")
+except ImportError:  # python-dotenv not installed: only real environment variables are used
+    pass
+
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 CHAT_MODEL = os.getenv("CVM_CHAT_MODEL", "qwen2.5:7b")
 EMBED_MODEL = os.getenv("CVM_EMBED_MODEL", "nomic-embed-text")
@@ -50,5 +59,30 @@ SIM_LOW = 0.55
 SIM_HIGH = 0.72
 # Below this similarity (and no keyword / verified evidence) an AI "met" claim is downgraded to "partial"
 SIM_VERIFY_MIN = 0.62
+
+# Model providers the app can use. "models" are only suggestions for the dropdown — any model
+# name can be typed in the app. Edit these lists freely when providers release new models.
+PROVIDERS = {
+    "ollama": {"label": "Ollama (local)", "cloud": False, "env_key": None, "base_url": None,
+               "models": [CHAT_MODEL]},
+    "openai": {"label": "OpenAI", "cloud": True, "env_key": "OPENAI_API_KEY", "base_url": None,
+               "models": ["gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-luna"],
+               "key_url": "https://platform.openai.com/api-keys"},
+    "anthropic": {"label": "Anthropic", "cloud": True, "env_key": "ANTHROPIC_API_KEY", "base_url": None,
+                  "models": ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"],
+                  "key_url": "https://console.anthropic.com/settings/keys"},
+    "openrouter": {"label": "OpenRouter", "cloud": True, "env_key": "OPENROUTER_API_KEY",
+                   "base_url": "https://openrouter.ai/api/v1",
+                   "models": ["openai/gpt-6.1-terra", "anthropic/claude-sonnet-5.5", "anthropic/claude-haiku-5.5",
+                              "google/gemini-4-argon", "deepseek/deepseek-v4.1-flash-1017"],
+                   "key_url": "https://openrouter.ai/keys"},
+}
+DEFAULT_PROVIDER = "ollama"
+CLOUD_MAX_TOKENS = 4096   # upper limit for one answer from a cloud model
+
+# LangGraph loop limits
+MAX_RECHECKS = 1          # how often to ask again for requirements the model skipped
+MAX_LETTER_REWRITES = 2   # automatic rewrites when the fact check finds unsupported claims
+CHECKPOINT_DB = DATA_DIR / "graph_checkpoints.db"   # saved graph runs (pause / resume)
 
 APPLICATION_STATUSES = ["analysed", "applied", "interview", "offer", "rejected", "not applying"]

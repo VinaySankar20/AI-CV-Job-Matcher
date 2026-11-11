@@ -6,13 +6,12 @@ from pypdf import PdfReader
 from matcher import config, germany
 from matcher.cover_letter import format_date, generate_cover_letter, letter_to_text, text_to_letter
 from matcher.export import to_docx, to_pdf
-from matcher.llm import LLMError, extract_json
 from matcher.pdf_reader import PDFTextError, extract_pdf_text
-from matcher.scorer import analyse
+from matcher.pipeline import analyse
 from matcher.storage import Storage
 from matcher.tailor import tailor_cv
 from matcher.textutils import keyword_coverage, keyword_in_text, normalize
-from tests.fake_llm import SAMPLE_CV, SAMPLE_JD_DE, SAMPLE_JD_EN, FakeLLM
+from tests.fake_llm import SAMPLE_CV, SAMPLE_JD_DE, SAMPLE_JD_EN, FakeModels
 
 PROFILE = {"full_name": "Max Mustermann", "street": "Musterstraße 1", "postal_city": "10115 Berlin",
            "email": "max@example.com", "phone": "+49 151 000000", "german_level": "A2",
@@ -67,16 +66,9 @@ def test_keywords():
     assert cov == 0.5 and missing == ["Airflow"]
 
 
-def test_extract_json():
-    assert extract_json('```json\n{"a": 1}\n```') == {"a": 1}
-    assert extract_json('Here you go: {"a": 2} thanks') == {"a": 2}
-    with pytest.raises(LLMError):
-        extract_json("no json")
-
-
 # ---------------------------------------------------------------- scoring
 def test_good_match_english():
-    a = analyse(FakeLLM(), SAMPLE_CV, SAMPLE_JD_EN, PROFILE)
+    a = analyse(FakeModels(), SAMPLE_CV, SAMPLE_JD_EN, PROFILE)
     assert a["overall"] > config.COVER_LETTER_THRESHOLD
     assert a["cover_letter_eligible"]
     assert a["germany"]["job_language"] == "en"
@@ -89,7 +81,7 @@ def test_good_match_english():
 
 
 def test_weak_match_german_gets_penalty_and_cap():
-    a = analyse(FakeLLM(), SAMPLE_CV, SAMPLE_JD_DE, PROFILE)
+    a = analyse(FakeModels(), SAMPLE_CV, SAMPLE_JD_DE, PROFILE)
     assert a["germany"]["job_language"] == "de"
     assert a["germany"]["german_requirement"]["level"] == "C1"
     assert a["categories"]["languages"]["score"] <= 1.5
@@ -102,7 +94,7 @@ def test_weak_match_german_gets_penalty_and_cap():
 
 
 def test_works_without_embeddings():
-    a = analyse(FakeLLM(with_embeddings=False), SAMPLE_CV, SAMPLE_JD_EN, PROFILE)
+    a = analyse(FakeModels(with_embeddings=False), SAMPLE_CV, SAMPLE_JD_EN, PROFILE)
     assert not a["semantic_available"]
     assert "Semantic similarity" not in a["categories"]["skills"]["parts"]
     assert 0 <= a["overall"] <= 5
@@ -110,8 +102,9 @@ def test_works_without_embeddings():
 
 # ---------------------------------------------------------------- outputs
 def test_tailor_and_letter_roundtrip():
-    llm = FakeLLM()
+    llm = FakeModels()
     a = analyse(llm, SAMPLE_CV, SAMPLE_JD_EN, PROFILE)
+    assert a["trace"][0]["node"] == "extract_requirements" and a["awaiting_letter_decision"]
     tips = tailor_cv(llm, SAMPLE_CV, a)
     assert tips and all(t["original_found_in_cv"] for t in tips)
     letter = generate_cover_letter(llm, SAMPLE_CV, SAMPLE_JD_EN, a, PROFILE, tone="modern", length="short")
@@ -158,7 +151,7 @@ def test_storage(tmp_path):
     s.save_cv("a.pdf", "old")
     s.save_cv("b.pdf", "new")
     assert s.get_active_cv()["filename"] == "b.pdf"
-    a = analyse(FakeLLM(), SAMPLE_CV, SAMPLE_JD_EN, PROFILE)
+    a = analyse(FakeModels(), SAMPLE_CV, SAMPLE_JD_EN, PROFILE)
     app_id = s.add_application(a, SAMPLE_JD_EN, "https://example.com/job")
     s.update_application(app_id, status="applied", cover_letter_json={"subject": "x", "paragraphs": []})
     rows = s.list_applications()

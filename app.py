@@ -12,13 +12,14 @@ import pandas as pd
 import streamlit as st
 
 from matcher import config
-from matcher.cover_letter import (LENGTHS, fact_check, format_date, generate_cover_letter, letter_to_text,
-                                  text_to_letter)
+from matcher.cover_letter import LENGTHS, fact_check, format_date, letter_to_text, text_to_letter
 from matcher.export import to_docx, to_pdf
 from matcher.germany import CEFR
-from matcher.llm import LLMError, OllamaLLM
+from matcher.graph import NODE_LABELS
+from matcher import llm as llm_module
+from matcher.llm import LLMError, friendly_error
 from matcher.pdf_reader import PDFTextError, extract_pdf_text
-from matcher.scorer import analyse
+from matcher.pipeline import MatcherPipeline, sqlite_checkpointer
 from matcher.storage import Storage
 from matcher.tailor import tailor_cv
 
@@ -34,8 +35,20 @@ def get_storage() -> Storage:
 
 
 @st.cache_resource
-def get_llm() -> OllamaLLM:
-    return OllamaLLM()
+def get_models(provider: str, model: str):
+    return llm_module.create_models(provider, model)
+
+
+@st.cache_resource
+def get_checkpointer():
+    """Graph checkpoints are saved locally so runs can pause and resume."""
+    return sqlite_checkpointer(config.CHECKPOINT_DB)
+
+
+@st.cache_resource
+def get_pipeline(provider: str, model: str) -> MatcherPipeline:
+    """One LangGraph pipeline per selected model; all share the same checkpoint store."""
+    return MatcherPipeline(get_models(provider, model), get_checkpointer())
 
 
 def ss_default(key: str, value) -> None:
@@ -44,11 +57,10 @@ def ss_default(key: str, value) -> None:
 
 
 for k, v in {"analysis": None, "app_id": None, "jd_text": "", "job_url": "", "letter": None,
-             "letter_text": "", "tailor": None, "uploader_key": 0, "cv_text_used": ""}.items():
+             "letter_text": "", "tailor": None, "uploader_key": 0, "cv_text_used": "", "letter_run": None}.items():
     ss_default(k, v)
 
 storage = get_storage()
-llm = get_llm()
 
 
 def safe_filename(*parts: str) -> str:
@@ -57,30 +69,96 @@ def safe_filename(*parts: str) -> str:
 
 
 # =============================================================== sidebar
-def sidebar() -> dict:
-    health = llm.health()
+def choose_model() -> tuple[str, str]:
+    """Provider + model picker. Returns the ACTIVE choice (the last one that was valid)."""
+    saved = storage.get_setting("model_choice") or {}
+    active = (saved.get("provider") if saved.get("provider") in config.PROVIDERS else config.DEFAULT_PROVIDER,
+              saved.get("model") or "")
+    if active[0] == "ollama" and not active[1]:
+        active = ("ollama", config.CHAT_MODEL)
+
+    st.markdown("**Model**")
+    ids = list(config.PROVIDERS)
+    provider = st.selectbox("Provider", ids, index=ids.index(active[0]),
+                            format_func=lambda p: config.PROVIDERS[p]["label"])
+    spec = config.PROVIDERS[provider]
+
+    options = list(spec["models"])
+    if provider == "ollama":
+        local = get_models("ollama", config.CHAT_MODEL).health()
+        installed = [m for m in local["models"] if "embed" not in m]
+        options = list(dict.fromkeys(installed + options))
+    if provider == active[0] and active[1] and active[1] not in options:
+        options.insert(0, active[1])
+    other = "Other (type a name) …"
+    start = options.index(active[1]) if provider == active[0] and active[1] in options else 0
+    picked = st.selectbox("Model", options + [other], index=start, key=f"model_{provider}")
+    if picked == other:
+        hint = "e.g. vendor/model-name from openrouter.ai/models" if provider == "openrouter" else "exact model name"
+        picked = st.text_input("Model name", placeholder=hint, key=f"custom_{provider}").strip()
+    choice = (provider, picked)
+
+    problem = False
+    if not picked:
+        st.caption("Type a model name to use it.")
+        problem = True
+    elif spec["cloud"]:
+        consent = storage.get_setting("cloud_consent") or []
+        if not os.getenv(spec["env_key"]):
+            st.error(f"No API key for {spec['label']}.")
+            st.caption(f"Create a file named `.env` in the project folder with this line, then restart the app:")
+            st.code(f"{spec['env_key']}=your-key-here", language="bash")
+            st.caption(f"Get a key: {spec['key_url']}")
+            problem = True
+        elif provider not in consent:
+            st.warning(f"**{spec['label']} is a cloud service.** Your CV text and the job ad will be sent to "
+                       f"{spec['label']}'s servers, and usage is billed to your API key.")
+            if st.button(f"I understand — use {spec['label']}", key=f"consent_{provider}"):
+                storage.set_setting("cloud_consent", consent + [provider])
+                st.rerun()
+            problem = True
+
+    if not problem and choice != active:
+        storage.set_setting("model_choice", {"provider": provider, "model": picked})
+        active = choice
+    if problem:
+        st.caption(f"Still using: **{config.PROVIDERS[active[0]]['label']} · {active[1]}**")
+    return active
+
+
+def sidebar():
     with st.sidebar:
         st.header("🎯 CV ↔ Job Matcher")
-        st.caption("Runs 100% locally with Ollama.")
-        if not health["ok"]:
+        provider, model = choose_model()
+        models = get_models(provider, model)
+        health = models.health()
+        cloud = config.PROVIDERS[provider]["cloud"]
+        if cloud:
+            st.caption(f"☁️ **{models.label}** — CV and job ad are sent to {config.PROVIDERS[provider]['label']}.")
+            st.markdown(f"{'✅' if health['embed_model'] else '⚠️'} Embeddings (local): `{models.embed_model}`")
+            if not health["embed_model"]:
+                st.caption("Ollama isn't running or the embedding model is missing — the semantic check is skipped.")
+        elif not health["ok"]:
             st.error("Ollama is not running.")
             st.caption(health["error"])
             st.markdown("Start the **Ollama** app, then reload this page.")
         else:
-            st.markdown(f"{'✅' if health['chat_model'] else '⚠️'} Chat model: `{llm.chat_model}`")
+            st.caption("🔒 Runs 100% locally: nothing leaves your computer.")
+            st.markdown(f"{'✅' if health['chat_model'] else '⚠️'} Chat model: `{models.chat_model}`")
             if not health["chat_model"]:
-                st.code(f"ollama pull {llm.chat_model}", language="bash")
-            st.markdown(f"{'✅' if health['embed_model'] else '⚠️'} Embeddings: `{llm.embed_model}`")
+                st.code(f"ollama pull {models.chat_model}", language="bash")
+            st.markdown(f"{'✅' if health['embed_model'] else '⚠️'} Embeddings: `{models.embed_model}`")
             if not health["embed_model"]:
                 st.caption("Optional — without it the semantic check is skipped.")
-                st.code(f"ollama pull {llm.embed_model}", language="bash")
+                st.code(f"ollama pull {models.embed_model}", language="bash")
         st.divider()
         st.markdown("**Score weights**")
         for k, w in config.DEFAULT_WEIGHTS.items():
             st.caption(f"{config.CATEGORY_LABELS[k]}: {int(w * 100)}%")
         st.caption(f"− {config.MUST_HAVE_PENALTY} per missing must-have (max {config.MUST_HAVE_PENALTY_MAX})")
         st.caption(f"Cover letter when score > {config.COVER_LETTER_THRESHOLD}")
-    return health
+        st.caption(f"Letter is fact-checked and rewritten up to {config.MAX_LETTER_REWRITES}× automatically")
+    return models, get_pipeline(provider, model), health
 
 
 # =============================================================== analyse page
@@ -116,19 +194,42 @@ def _store_upload(file) -> None:
     st.rerun()
 
 
+def step_writer(status):
+    """Show each graph node in the status box as it starts and finishes."""
+    def on_step(node: str, phase: str, entry: dict | None) -> None:
+        label = NODE_LABELS.get(node, node)
+        if phase == "start":
+            status.update(label=f"{label} …")
+        elif entry and node != "approve_letter":
+            detail = f" — {entry['detail']}" if entry.get("detail") else ""
+            status.write(f"✓ {label} ({entry['seconds']:.1f} s){detail}")
+    return on_step
+
+
 def run_analysis(cv_text: str, jd_text: str, job_url: str) -> None:
     profile = storage.get_profile()
     with st.status("Analysing … (first run can take a minute while the model loads)", expanded=True) as status:
         try:
-            result = analyse(llm, cv_text, jd_text, profile, progress=lambda m: status.write(m))
+            result = pipeline.analyse(cv_text, jd_text, profile, on_step=step_writer(status))
         except LLMError as exc:
             status.update(label="Analysis failed", state="error")
             st.error(str(exc))
             return
         status.update(label="Analysis complete", state="complete", expanded=False)
     st.session_state.update(analysis=result, jd_text=jd_text, job_url=job_url, letter=None,
-                            letter_text="", tailor=None, cv_text_used=cv_text)
+                            letter_text="", tailor=None, cv_text_used=cv_text, letter_run=None)
     st.session_state.app_id = storage.add_application(result, jd_text, job_url)
+
+
+def render_trace(title: str, trace: list[dict]) -> None:
+    """Local log of the graph run: which node ran, how long it took, what it found."""
+    if not trace:
+        return
+    with st.expander(title):
+        rows = [{"Step": NODE_LABELS.get(t["node"], t["node"]), "Node": t["node"],
+                 "Seconds": t["seconds"], "Result": t.get("detail", "")} for t in trace]
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.caption(f"Total: {sum(t['seconds'] for t in trace):.1f} s · saved only on this computer")
 
 
 def render_score(a: dict) -> None:
@@ -150,6 +251,8 @@ def render_score(a: dict) -> None:
             st.warning("3.5 or below → no cover letter. See the gaps and CV tips.")
         if not a["semantic_available"]:
             st.caption("ℹ️ Semantic check skipped (embedding model not installed).")
+        if a.get("model"):
+            st.caption(f"Scored by: {a['model']}")
     with c2:
         for key, cat in a["categories"].items():
             w = a["weights"][key]
@@ -215,8 +318,8 @@ def render_tailoring(a: dict, cv_text: str) -> None:
         with st.spinner("Writing suggestions …"):
             try:
                 st.session_state.tailor = tailor_cv(llm, cv_text, a)
-            except LLMError as exc:
-                st.error(str(exc))
+            except Exception as exc:
+                st.error(str(friendly_error(exc, llm)))
     if st.session_state.tailor is not None:
         if not st.session_state.tailor:
             st.info("No suggestions returned — try again.")
@@ -251,22 +354,23 @@ def render_cover_letter(a: dict, cv_text: str) -> None:
     st.caption(f"Language: **{'German' if lang == 'de' else 'English'}** (same as the job ad)")
 
     target_words = LENGTHS[length][0]
-    label = "🔁 Regenerate" if st.session_state.letter else "✉️ Generate cover letter"
-    clicked = st.button(label, type="primary")
-    fix_list = st.session_state.pop("pending_fix", None)
-    if clicked or fix_list:
-        instructions = extra
-        if fix_list:
-            instructions += (" Fix these problems from the previous draft: "
-                             + " ".join(w.replace("**", "") for w in fix_list))
-        with st.spinner("Writing your cover letter …"):
+    label = "🔁 Regenerate" if st.session_state.letter else "✉️ Write cover letter"
+    if not st.session_state.letter and a.get("awaiting_letter_decision"):
+        st.caption("⏸️ The pipeline is paused here and waits for your go-ahead.")
+    if st.button(label, type="primary"):
+        with st.status("Writing your cover letter …", expanded=True) as status:
             try:
-                letter = generate_cover_letter(llm, cv_text, st.session_state.jd_text, a, profile,
-                                               tone=tone, length=length, extra_instructions=instructions)
+                run = pipeline.write_letter(a, cv_text, st.session_state.jd_text, profile, tone=tone,
+                                            length=length, extra=extra, on_step=step_writer(status))
             except LLMError as exc:
+                status.update(label="Cover letter failed", state="error")
                 st.error(str(exc))
                 return
+            status.update(label="Cover letter ready", state="complete", expanded=False)
+        letter = run["letter"]
+        a["thread_id"] = run["thread_id"]
         st.session_state.letter = letter
+        st.session_state.letter_run = run
         st.session_state.letter_text = letter_to_text(letter)
         st.session_state["letter_editor"] = st.session_state.letter_text
         if st.session_state.app_id:
@@ -288,16 +392,22 @@ def render_cover_letter(a: dict, cv_text: str) -> None:
     st.caption(f"{words} words in the body (target ≈ {target_words})"
                + ("  ⚠️ quite long — consider 'short' or trimming" if words > target_words * 1.35 else ""))
 
+    run = st.session_state.letter_run or {}
+    if run.get("model"):
+        st.caption(f"Written by: {run['model']}")
+    if run.get("rewrites"):
+        st.caption(f"♻️ The fact check found problems in the first draft, so the letter was rewritten "
+                   f"{run['rewrites']}× automatically.")
     issues = fact_check(letter, cv_text, a, profile)
     if issues:
         with st.container(border=True):
             st.markdown("**🔎 Fact check — please review before sending:**")
             for w in issues:
                 st.markdown(f"- ⚠️ {w}")
-            st.button("🛠️ Regenerate and fix these issues", key="fix_btn",
-                      on_click=lambda ws=issues: st.session_state.update(pending_fix=ws))
+            st.caption("Edit the text above, or click Regenerate for a new attempt.")
     else:
         st.success("🔎 Fact check passed: no claims found that your CV doesn't support.")
+    render_trace("🧭 Pipeline trace — cover letter", run.get("trace", []))
 
     missing_address = not (a["job"].get("company") and profile.get("full_name"))
     with st.expander("Recipient & date (for the DIN 5008 letter layout)", expanded=missing_address):
@@ -334,7 +444,7 @@ def page_analyse() -> None:
         elif len(jd.strip()) < 200:
             st.error("Paste the full job description (at least a few sentences).")
         elif not HEALTH["ok"]:
-            st.error("Ollama is not running — start the Ollama app and reload the page.")
+            st.error(HEALTH["error"] or "The selected model is not available.")
         else:
             run_analysis(cv_text, jd.strip(), url.strip())
 
@@ -343,6 +453,7 @@ def page_analyse() -> None:
         st.divider()
         render_score(a)
         render_details(a)
+        render_trace("🧭 Pipeline trace — analysis", a.get("trace", []))
         st.divider()
         used_cv = st.session_state.cv_text_used or cv_text or ""
         render_tailoring(a, used_cv)
@@ -417,7 +528,7 @@ def page_tracker() -> None:
         if b1.button("↩️ Load into analyser"):
             st.session_state.update(analysis=an, app_id=item["id"], jd_text=item["jd_text"] or "",
                                     job_url=item["job_url"] or "", letter=item["cover_letter"], tailor=None,
-                                    cv_text_used="")
+                                    cv_text_used="", letter_run=None)
             st.session_state.letter_text = letter_to_text(item["cover_letter"]) if item["cover_letter"] else ""
             st.session_state["letter_editor"] = st.session_state.letter_text
             st.switch_page(PAGES["analyse"])
@@ -467,7 +578,7 @@ def page_profile() -> None:
         st.caption("No CV saved yet — upload one on the Analyse page.")
 
 
-HEALTH = sidebar()
+llm, pipeline, HEALTH = sidebar()
 START = os.getenv("CVM_START_PAGE", "analyse")  # used by the UI tests
 PAGES = {
     "analyse": st.Page(page_analyse, title="Analyse", icon="🔍", url_path="analyse", default=START == "analyse"),

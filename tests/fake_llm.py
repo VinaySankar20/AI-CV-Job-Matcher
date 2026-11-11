@@ -4,7 +4,9 @@ from __future__ import annotations
 import hashlib
 import re
 
-from matcher import prompts
+from langchain_core.runnables import RunnableLambda
+
+from matcher import schemas
 
 SAMPLE_CV = """Max Mustermann
 Musterstraße 1, 10115 Berlin · max@example.com
@@ -138,18 +140,25 @@ def _which(text: str) -> str:
     return "FinanzPartner" if "FinanzPartner" in text else "DataCorp"
 
 
-class FakeLLM:
+class FakeModels:
+    """Same interface as matcher.llm.OllamaModels: structured() and embed()."""
+
+    chat_model, embed_model, host = "fake-model", "fake-embed", "http://fake"
+
     def __init__(self, with_embeddings: bool = True):
         self.with_embeddings = with_embeddings
-        self.calls: list[str] = []
+        self.calls: list[str] = []          # schema names, in call order
+        self.prompts: dict[str, str] = {}   # last human prompt per schema name
 
-    def chat_json(self, system, user, schema=None, temperature=0.0):
-        self.calls.append(system[:30])
-        if system == prompts.EXTRACT_SYSTEM:
+    # ---- the canned answers (override in subclasses to simulate other model behaviour)
+    def respond(self, schema, system: str, user: str) -> dict:
+        if schema is schemas.JobExtraction:
             return _EXTRACT[_which(user)]
-        if system == prompts.EVALUATE_SYSTEM:
-            return _EVAL["FinanzPartner" if "FinanzPartner" in user else "DataCorp"]
-        if system == prompts.TAILOR_SYSTEM:
+        if schema is schemas.Evaluation:
+            return _EVAL[_which(user)]
+        if schema is schemas.Recheck:
+            return {"requirements": []}
+        if schema is schemas.Tailoring:
             return {"suggestions": [
                 {"original": "Created Power BI dashboards for the sales team",
                  "suggested": "Designed Power BI dashboards that gave the sales team a weekly KPI view",
@@ -158,7 +167,7 @@ class FakeLLM:
                  "suggested": "Wrote SQL queries on PostgreSQL to feed data pipelines",
                  "why": "Uses the ad's 'data pipelines' wording.", "needs_confirmation": False},
             ]}
-        if system.startswith("You write cover letters"):
+        if schema is schemas.CoverLetter:
             german = "in German" in system
             return {
                 "subject": "Bewerbung als Werkstudent" if german else "Application: Working Student Data Science",
@@ -168,10 +177,17 @@ class FakeLLM:
                                "Para three about availability."],
                 "closing": "Mit freundlichen Grüßen" if german else "Kind regards",
             }
-        raise AssertionError("unexpected prompt")
+        raise AssertionError(f"unexpected schema {schema}")
 
-    def chat_text(self, system, user, temperature=0.4):
-        return "ok"
+    def structured(self, schema, temperature: float = 0.0):
+        def run(prompt_value):
+            messages = prompt_value.to_messages()
+            system, user = messages[0].content, messages[-1].content
+            self.calls.append(schema.__name__)
+            self.prompts[schema.__name__] = user
+            return schema.model_validate(self.respond(schema, system, user))
+
+        return RunnableLambda(run)
 
     def embed(self, texts):
         if not self.with_embeddings:
