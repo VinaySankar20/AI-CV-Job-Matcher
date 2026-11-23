@@ -19,7 +19,7 @@ from matcher.graph import NODE_LABELS
 from matcher import llm as llm_module
 from matcher.llm import LLMError, friendly_error
 from matcher.pdf_reader import PDFTextError, extract_pdf_text
-from matcher.pipeline import MatcherPipeline, sqlite_checkpointer
+from matcher.pipeline import MatcherPipeline, prune_checkpoints, sqlite_checkpointer
 from matcher.storage import Storage
 from matcher.tailor import tailor_cv
 
@@ -51,6 +51,21 @@ def get_pipeline(provider: str, model: str) -> MatcherPipeline:
     return MatcherPipeline(get_models(provider, model), get_checkpointer())
 
 
+@st.cache_data(ttl=15, show_spinner=False)
+def get_health(provider: str, model: str) -> dict:
+    """Model/server status, cached briefly so every click doesn't ping Ollama again."""
+    return get_models(provider, model).health()
+
+
+@st.cache_resource
+def prune_old_runs() -> int:
+    """Once per app start: drop saved graph runs that no tracked application refers to any more."""
+    try:
+        return prune_checkpoints(get_checkpointer(), get_storage().thread_ids())
+    except Exception:  # housekeeping only — never block the app
+        return 0
+
+
 def ss_default(key: str, value) -> None:
     if key not in st.session_state:
         st.session_state[key] = value
@@ -61,6 +76,7 @@ for k, v in {"analysis": None, "app_id": None, "jd_text": "", "job_url": "", "le
     ss_default(k, v)
 
 storage = get_storage()
+prune_old_runs()
 
 
 def safe_filename(*parts: str) -> str:
@@ -85,7 +101,7 @@ def choose_model() -> tuple[str, str]:
 
     options = list(spec["models"])
     if provider == "ollama":
-        local = get_models("ollama", config.CHAT_MODEL).health()
+        local = get_health("ollama", config.CHAT_MODEL)
         installed = [m for m in local["models"] if "embed" not in m]
         options = list(dict.fromkeys(installed + options))
     if provider == active[0] and active[1] and active[1] not in options:
@@ -131,7 +147,7 @@ def sidebar():
         st.header("🎯 CV ↔ Job Matcher")
         provider, model = choose_model()
         models = get_models(provider, model)
-        health = models.health()
+        health = get_health(provider, model)
         cloud = config.PROVIDERS[provider]["cloud"]
         if cloud:
             st.caption(f"☁️ **{models.label}** — CV and job ad are sent to {config.PROVIDERS[provider]['label']}.")
@@ -141,7 +157,10 @@ def sidebar():
         elif not health["ok"]:
             st.error("Ollama is not running.")
             st.caption(health["error"])
-            st.markdown("Start the **Ollama** app, then reload this page.")
+            st.markdown("Start the **Ollama** app, then check again.")
+            if st.button("🔄 Check again"):
+                get_health.clear()
+                st.rerun()
         else:
             st.caption("🔒 Runs 100% locally: nothing leaves your computer.")
             st.markdown(f"{'✅' if health['chat_model'] else '⚠️'} Chat model: `{models.chat_model}`")
@@ -218,7 +237,7 @@ def run_analysis(cv_text: str, jd_text: str, job_url: str) -> None:
         status.update(label="Analysis complete", state="complete", expanded=False)
     st.session_state.update(analysis=result, jd_text=jd_text, job_url=job_url, letter=None,
                             letter_text="", tailor=None, cv_text_used=cv_text, letter_run=None)
-    st.session_state.app_id = storage.add_application(result, jd_text, job_url)
+    st.session_state.app_id = storage.add_application(result, jd_text, job_url, cv_text)
 
 
 def render_trace(title: str, trace: list[dict]) -> None:
@@ -528,12 +547,17 @@ def page_tracker() -> None:
         if b1.button("↩️ Load into analyser"):
             st.session_state.update(analysis=an, app_id=item["id"], jd_text=item["jd_text"] or "",
                                     job_url=item["job_url"] or "", letter=item["cover_letter"], tailor=None,
-                                    cv_text_used="", letter_run=None)
+                                    cv_text_used=item.get("cv_text") or "", letter_run=None)
             st.session_state.letter_text = letter_to_text(item["cover_letter"]) if item["cover_letter"] else ""
             st.session_state["letter_editor"] = st.session_state.letter_text
             st.switch_page(PAGES["analyse"])
+        if not item.get("cv_text"):
+            st.caption("This older analysis has no saved CV — loading it uses your current CV.")
         if b2.button("🗑️ Delete", type="secondary"):
             storage.delete_application(item["id"])
+            thread_id = (an or {}).get("thread_id")
+            if thread_id:
+                get_checkpointer().delete_thread(thread_id)  # its saved graph run goes too
             st.rerun()
 
 

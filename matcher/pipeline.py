@@ -31,6 +31,25 @@ def sqlite_checkpointer(path=None):
     return SqliteSaver(sqlite3.connect(str(path), check_same_thread=False))
 
 
+def prune_checkpoints(checkpointer, keep: set[str]) -> int:
+    """Delete saved graph runs whose thread id is not in `keep`; returns how many were removed.
+
+    Without this the checkpoint file only ever grows (every analysis adds a thread).
+    """
+    conn = getattr(checkpointer, "conn", None)
+    if conn is not None:  # SqliteSaver: read the ids directly instead of loading every checkpoint
+        threads = {row[0] for row in conn.execute("SELECT DISTINCT thread_id FROM checkpoints")}
+    else:
+        threads = {c.config["configurable"]["thread_id"] for c in checkpointer.list(None)}
+    stale = threads - {t for t in keep if t}
+    for thread_id in stale:
+        checkpointer.delete_thread(thread_id)
+    if stale and conn is not None:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("VACUUM")  # give the freed space back to the disk
+    return len(stale)
+
+
 class MatcherPipeline:
     def __init__(self, models: Models, checkpointer=None):
         self.models = models

@@ -36,7 +36,12 @@ def _variants(keyword: str) -> set[str]:
         out.add(v.replace("-", " "))
         out.add(v.replace(" ", "-"))
         out.add(v.replace(" ", ""))
+        out.add(v.replace("/", " "))
     return {v for v in out if v}
+
+
+# "CI/CD", "TCP/IP", "UI/UX": one term, not two alternatives
+_ACRONYM_PAIR = re.compile(r"[A-Za-z]{1,5}(?:/[A-Za-z]{1,5})+")
 
 
 def keyword_in_text(keyword: str, normalized_text: str) -> bool:
@@ -45,7 +50,9 @@ def keyword_in_text(keyword: str, normalized_text: str) -> bool:
     "C or C++" / "Power BI oder Tableau" match if ANY alternative is found, and words
     joined in the CV ("Agile-Scrum", "C/C++") are also checked as separate words.
     """
-    alternatives = [a for a in re.split(r"\s+(?:or|oder|and/or|bzw\.?)\s+|\s*/\s*(?=[a-z])", keyword.strip(), flags=re.I) if a]
+    keyword = keyword.strip()
+    slash = r"" if _ACRONYM_PAIR.fullmatch(keyword) and keyword.isupper() else r"|\s*/\s*(?=[a-z])"
+    alternatives = [a for a in re.split(rf"\s+(?:or|oder|and/or|bzw\.?)\s+{slash}", keyword, flags=re.I) if a]
     if len(alternatives) > 1:
         return any(keyword_in_text(a, normalized_text) for a in alternatives)
     split_text = re.sub(r"(?<=\w)[-/](?=\w)", " ", normalized_text)

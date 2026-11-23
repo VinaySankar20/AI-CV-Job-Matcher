@@ -32,7 +32,7 @@ def _clamp(x: float, lo: float = 0.0, hi: float = 5.0) -> float:
 
 
 _STOPWORDS = {"and", "or", "with", "of", "in", "the", "for", "a", "an", "to", "on", "und", "oder", "mit",
-              "in", "der", "die", "das", "von", "im", "experience", "erfahrung", "knowledge", "kenntnisse",
+              "der", "die", "das", "von", "im", "experience", "erfahrung", "knowledge", "kenntnisse",
               "skills", "skill"}
 
 

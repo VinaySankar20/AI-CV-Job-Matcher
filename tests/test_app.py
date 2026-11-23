@@ -31,6 +31,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CHECKPOINT_DB", tmp_path / "checkpoints.db")
     monkeypatch.setattr(llm_module, "OllamaModels", FakeOllama)
     st.cache_resource.clear()
+    st.cache_data.clear()
     s = Storage(tmp_path / "app.db")
     s.save_profile({"full_name": "Max Mustermann", "german_level": "A2", "place": "Berlin"})
     s.save_cv("cv.pdf", SAMPLE_CV)
@@ -47,6 +48,7 @@ def test_full_flow(app):
     assert not at.exception
     assert any("/ 5" in m.value for m in at.metric)
     assert len(app.list_applications()) == 1
+    assert app.get_application(app.list_applications()[0]["id"])["cv_text"] == SAMPLE_CV
 
     assert any("Pipeline trace" in e.label for e in at.expander)
     assert any("paused here" in c.value for c in at.caption)          # human-in-the-loop pause

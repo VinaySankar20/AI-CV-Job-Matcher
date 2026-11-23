@@ -158,10 +158,37 @@ class CloudModels:
             attempts = [self.chat(temperature).with_structured_output(schema, method="json_schema", strict=True),
                         self.chat(temperature).with_structured_output(schema, method="function_calling"),
                         self.chat(None).with_structured_output(schema, method="json_schema", strict=True)]
-        return attempts[0].with_fallbacks(attempts[1:])
+        return _first_success(attempts)
 
     def embed(self, texts: list[str]) -> list[list[float]] | None:
         return self.embedder.embed(texts)
+
+
+def _is_fatal(exc: Exception) -> bool:
+    """Errors another request format can't fix: bad key, no credit, rate limit, network, timeout."""
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    if status in (401, 402, 403, 429):
+        return True
+    name = type(exc).__name__
+    return any(s in name for s in ("Authentication", "PermissionDenied", "RateLimit", "APIConnection", "Timeout"))
+
+
+def _first_success(attempts: list[Runnable]) -> Runnable:
+    """Try each attempt in turn; stop at once on a fatal error. Re-raises the first error if all fail."""
+    from langchain_core.runnables import RunnableLambda
+
+    def run(inputs: Any, config: Any = None) -> Any:
+        first: Exception | None = None
+        for attempt in attempts:
+            try:
+                return attempt.invoke(inputs, config)
+            except Exception as exc:
+                first = first or exc
+                if _is_fatal(exc):
+                    raise
+        raise first  # type: ignore[misc]
+
+    return RunnableLambda(run, name="structured_with_fallbacks")
 
 
 def create_models(provider: str = "ollama", chat_model: str | None = None):

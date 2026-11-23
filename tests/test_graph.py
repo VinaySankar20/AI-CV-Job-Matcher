@@ -1,7 +1,9 @@
 """LangGraph behaviour: pause/resume, the fact-check rewrite loop, checkpoints, routing."""
 from matcher import config, schemas
 from matcher.graph import NODE_LABELS
-from matcher.pipeline import MatcherPipeline, sqlite_checkpointer
+from pathlib import Path
+
+from matcher.pipeline import MatcherPipeline, prune_checkpoints, sqlite_checkpointer
 from tests.fake_llm import SAMPLE_CV, SAMPLE_JD_DE, SAMPLE_JD_EN, FakeModels
 
 PROFILE = {"full_name": "Max Mustermann", "german_level": "A2"}
@@ -113,3 +115,21 @@ def test_sqlite_checkpoints_survive_a_restart(tmp_path):
 def test_graph_diagram_lists_every_node():
     diagram = MatcherPipeline(FakeModels()).mermaid()
     assert all(node in diagram for node in NODE_LABELS)
+
+
+def test_readme_diagram_matches_the_graph():
+    """The README's hand-drawn mermaid diagram must name every node the graph really has."""
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+    block = readme.split("```mermaid", 1)[1].split("```", 1)[0]
+    assert [n for n in NODE_LABELS if n not in block] == []
+
+
+def test_prune_removes_only_unreferenced_runs(tmp_path):
+    cp = sqlite_checkpointer(tmp_path / "checkpoints.db")
+    pipe = MatcherPipeline(FakeModels(), cp)
+    keep = pipe.analyse(SAMPLE_CV, SAMPLE_JD_EN, PROFILE)["thread_id"]
+    drop = pipe.analyse(SAMPLE_CV, SAMPLE_JD_EN, PROFILE)["thread_id"]
+    assert prune_checkpoints(cp, {keep}) == 1
+    assert pipe.graph.get_state(pipe._cfg(keep)).next == ("approve_letter",)
+    assert not pipe.graph.get_state(pipe._cfg(drop)).values
+    assert prune_checkpoints(cp, {keep}) == 0

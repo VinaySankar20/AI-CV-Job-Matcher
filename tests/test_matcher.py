@@ -62,6 +62,10 @@ def test_keywords():
     assert keyword_in_text("postgres", norm)          # alias of PostgreSQL
     assert keyword_in_text("machine-learning", normalize("Machine learning projects"))
     assert not keyword_in_text("Java", normalize("JavaScript developer"))
+    assert not keyword_in_text("CI/CD", normalize("CI pipelines only"))   # acronym pair is one term
+    assert keyword_in_text("CI/CD", normalize("Built CI/CD with GitLab"))
+    assert keyword_in_text("CI/CD", normalize("continuous integration with Jenkins"))
+    assert keyword_in_text("C/C++", normalize("Embedded C programming"))  # real alternatives still split
     cov, found, missing = keyword_coverage(["Python", "python", "Airflow"], SAMPLE_CV)
     assert cov == 0.5 and missing == ["Airflow"]
 
@@ -157,5 +161,21 @@ def test_storage(tmp_path):
     rows = s.list_applications()
     assert rows[0]["company"] == "DataCorp GmbH" and rows[0]["status"] == "applied" and rows[0]["has_letter"]
     assert s.get_application(app_id)["analysis"]["overall"] == a["overall"]
+    assert s.thread_ids() == {a["thread_id"]}
     s.delete_application(app_id)
     assert s.list_applications() == []
+    assert s.add_application(a, SAMPLE_JD_EN, cv_text=SAMPLE_CV) and \
+        s.get_application(s.list_applications()[0]["id"])["cv_text"] == SAMPLE_CV
+
+
+def test_storage_migrates_old_database(tmp_path):
+    import sqlite3
+    db = tmp_path / "old.db"
+    with sqlite3.connect(db) as c:   # applications table as created by earlier versions (no cv_text)
+        c.execute("CREATE TABLE applications (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, "
+                  "updated_at TEXT NOT NULL, company TEXT, role TEXT, location TEXT, job_url TEXT, jd_text TEXT, "
+                  "overall_score REAL, analysis_json TEXT, cover_letter_json TEXT, "
+                  "status TEXT NOT NULL DEFAULT 'analysed', notes TEXT DEFAULT '')")
+        c.execute("INSERT INTO applications(created_at, updated_at, analysis_json) VALUES('x', 'x', '{}')")
+    s = Storage(db)
+    assert s.get_application(1)["cv_text"] is None

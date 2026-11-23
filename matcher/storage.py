@@ -42,6 +42,9 @@ class Storage:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as c:
             c.executescript(_SCHEMA)
+            columns = {row["name"] for row in c.execute("PRAGMA table_info(applications)")}
+            if "cv_text" not in columns:  # databases from before the CV was stored per application
+                c.execute("ALTER TABLE applications ADD COLUMN cv_text TEXT")
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -99,16 +102,29 @@ class Storage:
             c.execute("UPDATE cvs SET is_active=0")
 
     # ---------------- applications
-    def add_application(self, analysis: dict[str, Any], jd_text: str, job_url: str = "") -> int:
+    def add_application(self, analysis: dict[str, Any], jd_text: str, job_url: str = "",
+                        cv_text: str = "") -> int:
         job = analysis.get("job", {})
         now = self._now()
         with self._conn() as c:
             cur = c.execute(
                 "INSERT INTO applications(created_at, updated_at, company, role, location, job_url, jd_text, "
-                "overall_score, analysis_json, status) VALUES(?,?,?,?,?,?,?,?,?, 'analysed')",
+                "overall_score, analysis_json, status, cv_text) VALUES(?,?,?,?,?,?,?,?,?, 'analysed', ?)",
                 (now, now, job.get("company", ""), job.get("job_title", ""), job.get("location", ""), job_url,
-                 jd_text, analysis.get("overall"), json.dumps(analysis, ensure_ascii=False)))
+                 jd_text, analysis.get("overall"), json.dumps(analysis, ensure_ascii=False), cv_text or None))
             return int(cur.lastrowid)
+
+    def thread_ids(self) -> set[str]:
+        """Graph thread ids still referenced by a saved application (used to prune old checkpoints)."""
+        with self._conn() as c:
+            rows = c.execute("SELECT analysis_json FROM applications").fetchall()
+        ids = set()
+        for row in rows:
+            try:
+                ids.add(json.loads(row["analysis_json"] or "{}").get("thread_id"))
+            except (ValueError, AttributeError):
+                continue
+        return {i for i in ids if i}
 
     def update_application(self, app_id: int, **fields: Any) -> None:
         allowed = {"company", "role", "location", "job_url", "status", "notes", "cover_letter_json", "overall_score"}

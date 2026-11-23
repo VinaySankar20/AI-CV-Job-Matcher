@@ -135,6 +135,7 @@ def test_bad_key_gives_a_clear_message(cloud):
         extract_chain(models).invoke({"jd": "x"})
     msg = str(friendly_error(err.value, models))
     assert "rejected the API key" in msg and "OPENAI_API_KEY" in msg
+    assert len(cloud.requests) == 1          # no pointless fallback attempts with the same bad key
 
 
 def test_health_and_factory(monkeypatch):
