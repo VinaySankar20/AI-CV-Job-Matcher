@@ -13,6 +13,9 @@ ALIASES = {
     "ci/cd": "continuous integration", "sql server": "mssql", "ms excel": "excel",
     "power bi": "powerbi", "scikit-learn": "sklearn", "react.js": "react", "reactjs": "react",
     "node.js": "node", "nodejs": "node", "vue.js": "vue", "c sharp": "c#",
+    "software engineer": "software engineering", "software engineers": "software engineering",
+    "software developer": "software development", "software developers": "software development",
+    "softwareentwickler": "softwareentwicklung",
     "maschinelles lernen": "machine learning", "künstliche intelligenz": "artificial intelligence",
 }
 

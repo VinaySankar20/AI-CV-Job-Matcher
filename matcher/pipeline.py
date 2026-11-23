@@ -45,8 +45,8 @@ def prune_checkpoints(checkpointer, keep: set[str]) -> int:
     for thread_id in stale:
         checkpointer.delete_thread(thread_id)
     if stale and conn is not None:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.execute("VACUUM")  # give the freed space back to the disk
+        conn.execute("VACUUM")  # give the freed space back to the disk …
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # … and empty the WAL file VACUUM wrote into
     return len(stale)
 
 

@@ -157,20 +157,30 @@ Answer with JSON only."""
 RESUME_USER = """Build a tailored resume for this job from the COMPLETE CV below.
 
 Size limits ({size}):
-- "summary": max {summary_words} words, 2-3 sentences on why the candidate fits THIS job.
-- "experience": the {max_entries} most relevant jobs/internships/working-student roles, most relevant first
-  (if relevance is similar, newest first). Max {max_bullets} bullets each.
-- "projects": the {max_projects} most relevant projects, max {max_bullets} bullets each. [] if none fit.
-- "skills": 3-5 groups (e.g. Programming, Data & ML, Tools), only skills that matter for this job.
+- "summary": max {summary_words} words. Adapt the CV's own profile/summary to this job: what the candidate
+  is and has done, most job-relevant first. No "Seeking …" sentence, no company name, no "I".
+- "experience": ONE entry per role (job title + employer), max {max_entries} roles, most relevant first
+  (newest first if similar). If the CV lists several projects/areas under one role (sub-headings with
+  their own dates), put them in that entry's "subsections" (max {max_subsections}, most relevant first,
+  max {sub_bullets} bullets each) with "name" and "dates" copied exactly, and leave the entry's own
+  "bullets" []. NEVER turn sub-projects into separate jobs and never repeat the employer.
+  A role without sub-headings: max {max_bullets} bullets, "subsections": [].
+- "projects": the {max_projects} most relevant projects, max {project_bullets} bullets each. "tech": the
+  project's tech-stack line from the CV, most job-relevant items first (max 8 items). [] if none fit.
+- "skills": copy the CV's skills section group by group (same group names and items), job-relevant first.
 - "education": every degree in the complete CV, newest first; bullets only for job-relevant
   thesis/courses (max 2).
 - "languages": every language with the level exactly as written in the complete CV.
-- "certifications": only job-relevant ones from the complete CV, else [].
+- "certifications": every certification from the complete CV.
 
 STRICT FACT RULES — breaking any of these makes the resume unusable:
-- Every bullet must be a rephrasing of something in the complete CV. Start with a strong verb.
+- Keep the CV's details. Every bullet is based on ONE line of the complete CV and keeps every board,
+  platform, tool, protocol, metric and number of that line (e.g. exact model names, "JTAG and SWD", "40%").
+  You may drop filler words and put job-relevant words first — never generalise specifics away
+  ("six platforms: Renesas RA, STM32, …" must not become "several platforms").
+- Never move a number or result to another bullet, never merge two lines into one.
 - Copy organisation names, job titles, dates and grades exactly. Never change a date.
-- Never invent numbers, percentages, team sizes, tools, employers or results. Keep numbers that are there.
+- Never invent numbers, percentages, team sizes, tools, employers or results.
 - Use the job's keywords only where the complete CV supports them.
 - NEVER mention any of these (the complete CV does not show them): {do_not_claim}
 - No name, address, phone, email or photo — the app adds the header itself.

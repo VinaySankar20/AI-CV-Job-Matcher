@@ -85,12 +85,21 @@ class CoverLetter(BaseModel):
 
 
 # ---------------------------------------------------------------- 5. tailored resume
+class ResumeSubsection(BaseModel):
+    name: str = Field(description="Project / area name under this role, copied from the complete CV")
+    dates: str = Field(description="Dates copied exactly from the complete CV, or empty")
+    bullets: list[str]
+
+
 class ResumeEntry(BaseModel):
     title: str = Field(description="Role, degree or project name, as in the complete CV")
     organisation: str = Field(description="Employer / university / client copied exactly, or empty")
     location: str
     dates: str = Field(description="Dates copied exactly from the complete CV, or empty")
+    tech: str = Field(description="Tech-stack line copied from the complete CV, or empty")
     bullets: list[str]
+    subsections: list[ResumeSubsection] = Field(
+        description="Projects/areas listed under this ONE role in the complete CV; [] if none")
 
 
 class SkillGroup(BaseModel):

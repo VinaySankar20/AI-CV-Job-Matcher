@@ -133,3 +133,5 @@ def test_prune_removes_only_unreferenced_runs(tmp_path):
     assert pipe.graph.get_state(pipe._cfg(keep)).next == ("approve_letter",)
     assert not pipe.graph.get_state(pipe._cfg(drop)).values
     assert prune_checkpoints(cp, {keep}) == 0
+    wal = tmp_path / "checkpoints.db-wal"
+    assert not wal.exists() or wal.stat().st_size == 0   # VACUUM output flushed, no big WAL left

@@ -145,17 +145,19 @@ def honest_resume() -> dict:
                    {"category": "Data & ML", "items": ["PyTorch", "OpenCV", "Power BI"]},
                    {"category": "Tools", "items": ["Git", "Docker"]}],
         "experience": [{"title": "Data Analyst Intern", "organisation": "Acme GmbH", "location": "",
-                        "dates": "2023", "bullets": [
+                        "dates": "2023", "tech": "", "subsections": [], "bullets": [
                             "Built Python ETL scripts with pandas to clean sales data",
                             "Created Power BI dashboards for the sales team",
                             "Wrote SQL queries on PostgreSQL databases",
                             "Cleaned sales data with pandas"]}],
         "projects": [{"title": "CNN image classifier", "organisation": "", "location": "", "dates": "",
+                      "tech": "PyTorch", "subsections": [],
                       "bullets": ["Trained a CNN image classifier in PyTorch reaching 92% accuracy"]}],
         "education": [{"title": "M.Sc. Data Science", "organisation": "TU Berlin", "location": "",
-                       "dates": "since 10/2025", "bullets": []},
+                       "dates": "since 10/2025", "tech": "", "subsections": [], "bullets": []},
                       {"title": "B.Tech. Computer Science", "organisation": "University of Kerala",
-                       "location": "", "dates": "2019-2023", "bullets": []}],
+                       "location": "", "dates": "2019-2023", "tech": "", "subsections": [],
+                       "bullets": []}],
         "languages": ["English (C1)", "German (A2)", "Malayalam (native)"],
         "certifications": [],
     }

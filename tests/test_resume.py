@@ -88,3 +88,105 @@ def test_storage_master_cv_and_resume(tmp_path):
     assert s.get_application(app_id)["resume"]["headline"] == "x"
     s.clear_master_cv()
     assert s.get_master_cv() is None
+
+
+def test_number_words_and_engineer_alias_are_not_false_alarms():
+    cv = SAMPLE_CV + "\nPROFILE\nSoftware engineer with four years of experience.\n"
+    a = analyse(FakeModels(), cv, SAMPLE_JD_EN, PROFILE)
+    resume = clean_resume({**honest_resume(), "summary": "Software engineering background, 4 years of experience."},
+                          "en")
+    assert resume_fact_check(resume, cv, a) == []
+    resume["summary"] = "5 years of experience."
+    assert any("**5**" in w for w in resume_fact_check(resume, cv, a))
+
+
+# ---------------------------------------------------------------- structure, details, skills
+FULL_CV = """PROFILE
+Embedded software engineer with four years of C/C++ firmware experience.
+EXPERIENCE
+Software Developer 11/2021 – 09/2025
+Quest Global Engineering Services, Trivandrum, India
+Edge AI hardware benchmarking 2024 – 2025
+• Benchmarked six AI-capable MCU and MPU platforms: Renesas RA, STM32, NXP, Hailo, NVIDIA Jetson, TI AM69
+measuring inference latency, energy per inference and real time responsiveness.
+Networked audio firmware 2022 – 2024
+• Debugged firmware directly on target hardware using JTAG and SWD to isolate faults.
+• Upgraded UI firmware, improving interface responsiveness by 30%.
+SKILLS
+Languages : C, C++, Python
+Embedded : JTAG, SWD, STM32
+Methods : Agile-Scrum, CI, Unit & regression testing
+CERTIFICATIONS & LANGUAGES
+Languages : English – C2 • German – B1
+"""
+SCRUM_JD = "Working student software engineering. You join a Scrum team and help with testing. " * 4
+
+
+def _entry(title, dates, bullets, org="Quest Global Engineering Services"):
+    return {"title": title, "organisation": org, "location": "Trivandrum, India", "dates": dates, "tech": "",
+            "bullets": bullets, "subsections": []}
+
+
+def test_split_roles_are_merged_and_lost_details_restored():
+    data = {"headline": "Embedded Software Engineer",
+            "summary": "Embedded software engineer with four years of C/C++ firmware experience.",
+            "projects": [], "education": [], "languages": ["English – C2", "German – B1"], "certifications": [],
+            "skills": [{"category": "Programming", "items": ["C", "JavaScript"]}], "experience": [
+        _entry("Software Developer", "11/2021 – 09/2025", []),
+        _entry("Edge AI Hardware Benchmarking", "2024 – 2025",
+               ["Benchmarked several AI platforms for latency and energy."]),        # specifics generalised away
+        _entry("Networked Audio Firmware", "2022 – 2024",
+               ["Debugged firmware on target hardware, improving responsiveness by 30%.",   # number moved here
+                "Upgraded UI firmware, improving interface responsiveness by 30%."]),
+    ]}
+    from matcher.resume import finish_resume
+    r = finish_resume(data, FULL_CV, SCRUM_JD, "en", "one_page")
+    assert len(r["experience"]) == 1                                                  # one role …
+    subs = r["experience"][0]["subsections"]
+    assert [s["name"] for s in subs] == ["Edge AI Hardware Benchmarking", "Networked Audio Firmware"]  # … 2 projects
+    assert "Renesas RA, STM32, NXP, Hailo, NVIDIA Jetson, TI AM69" in subs[0]["bullets"][0]
+    assert "JTAG and SWD" in subs[1]["bullets"][0] and "30%" not in subs[1]["bullets"][0]
+    assert subs[1]["bullets"][1].endswith("by 30%.")
+    # skills come from the CV's skills section: all groups, Scrum/testing first, nothing invented
+    assert r["skills"][0]["category"] == "Methods" and r["skills"][0]["items"][0] == "Agile-Scrum"
+    assert {g["category"] for g in r["skills"]} == {"Methods", "Programming Languages", "Embedded"}
+    assert "JavaScript" not in str(r["skills"])
+    a = analyse(FakeModels(), FULL_CV, SAMPLE_JD_EN, PROFILE)
+    assert resume_fact_check(r, FULL_CV, a) == []
+    text = resume_to_text(r, PROFILE)
+    assert "  Networked Audio Firmware  (2022 – 2024)" in text and text.count("Quest Global") == 1
+    pdf = resume_to_pdf(r, PROFILE)
+    pdf_text = "".join(p.extract_text() for p in PdfReader(io.BytesIO(pdf)).pages)
+    assert "Networked Audio Firmware" in pdf_text and "Agile-Scrum" in pdf_text
+    from docx import Document
+    doc_text = "\n".join(p.text for p in Document(io.BytesIO(resume_to_docx(r, PROFILE))).paragraphs)
+    assert "Networked Audio Firmware" in doc_text and "JTAG and SWD" in doc_text
+
+
+def test_cv_without_skills_section_keeps_only_backed_model_skills():
+    from matcher.resume import parse_cv_skills, skills_for_job
+    cv = "EXPERIENCE\n• Wrote Python and SQL scripts for reports.\n"
+    assert parse_cv_skills(cv) == []
+    out = skills_for_job(cv, "Python job", [{"category": "Programming", "items": ["Python", "SQL", "Rust"]}])
+    assert out == [{"category": "Programming", "items": ["Python", "SQL"]}]
+
+
+def test_bullets_filed_under_their_project_and_titles_cleaned():
+    from matcher.resume import finish_resume
+    data = {"headline": "", "summary": "", "skills": [], "languages": [], "certifications": [],
+            "experience": [{**_entry("Software Developer", "11/2021 – 09/2025",
+                                     ["Upgraded UI firmware, improving interface responsiveness by 30%."]),
+                            "subsections": [{"name": "Networked audio firmware", "dates": "2022 – 2024",
+                                             "bullets": []},
+                                            {"name": "Edge AI hardware benchmarking", "dates": "", "bullets": []}]}],
+            "projects": [{"title": "CNN classifier", "organisation": "Personal Project, 2026 • Link",
+                          "location": "2026", "dates": "", "tech": "", "bullets": [], "subsections": []}],
+            "education": [{"title": "B.Tech", "organisation": "", "location": "", "dates": "", "tech": "",
+                           "bullets": ["Completed with a focus on edge-AI benchmarking."], "subsections": []}]}
+    r = finish_resume(data, FULL_CV + "EDUCATION\nB.Tech Computer Science 2017 – 2021\n", SCRUM_JD, "en")
+    role = r["experience"][0]
+    assert role["bullets"] == [] and [s["name"] for s in role["subsections"]] == ["Networked audio firmware"]
+    assert role["subsections"][0]["bullets"] == ["Upgraded UI firmware, improving interface responsiveness by 30%."]
+    p = r["projects"][0]
+    assert (p["organisation"], p["location"], p["dates"]) == ("Personal Project", "", "2026")
+    assert r["education"][0]["bullets"] == []                     # not in the CV's education section

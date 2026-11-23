@@ -242,8 +242,22 @@ def resume_to_docx(resume: dict[str, Any], profile: dict[str, Any]) -> bytes:
                 p.add_run(left).bold = True
                 if right:
                     p.add_run(f"\t{right}")
+                if e.get("tech"):
+                    para(e["tech"], italic=True, size=9, color=(0x55, 0x5F, 0x6D))
                 for b in e["bullets"]:
                     doc.add_paragraph(b, style="List Bullet").paragraph_format.space_after = Pt(0)
+                for sub in e.get("subsections", []):
+                    sp = para(space_after=0)
+                    sp.paragraph_format.space_before = Pt(2)
+                    sp.paragraph_format.left_indent = Mm(4)
+                    sp.paragraph_format.tab_stops.add_tab_stop(text_width - Mm(4), WD_TAB_ALIGNMENT.RIGHT)
+                    run = sp.add_run(sub["name"])
+                    run.bold, run.italic = True, True
+                    if sub.get("dates"):
+                        sp.add_run(f"\t{sub['dates']}").italic = True
+                    for b in sub["bullets"]:
+                        bp = doc.add_paragraph(b, style="List Bullet 2")
+                        bp.paragraph_format.space_after = Pt(0)
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -251,25 +265,42 @@ def resume_to_docx(resume: dict[str, Any], profile: dict[str, Any]) -> bytes:
 
 
 def resume_to_pdf(resume: dict[str, Any], profile: dict[str, Any]) -> bytes:
+    """Build the PDF; shrink the type a little (down to ~86%) until it fits the chosen 1 or 2 pages."""
+    from pypdf import PdfReader
+
+    pages = 2 if resume.get("size") == "two_pages" else 1
+    pdf = b""
+    for scale in (1.0, 0.95, 0.9, 0.86):
+        pdf = _build_resume_pdf(resume, profile, scale)
+        if len(PdfReader(io.BytesIO(pdf)).pages) <= pages:
+            break
+    return pdf
+
+
+def _build_resume_pdf(resume: dict[str, Any], profile: dict[str, Any], scale: float = 1.0) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
-    from reportlab.platypus import (HRFlowable, KeepTogether, ListFlowable, ListItem, Paragraph,
+    from reportlab.platypus import (HRFlowable, Indenter, KeepTogether, ListFlowable, ListItem, Paragraph,
                                     SimpleDocTemplate, Table, TableStyle)
 
     from .resume import HEADINGS, SECTION_ORDER
 
     h = HEADINGS.get(resume.get("language", "en"), HEADINGS["en"])
     accent = colors.HexColor("#1F3A5F")
-    base = ParagraphStyle("base", fontName="Helvetica", fontSize=9.5, leading=12.5)
+    k = scale
+    base = ParagraphStyle("base", fontName="Helvetica", fontSize=9.5 * k, leading=12.5 * k)
     name_st = ParagraphStyle("name", parent=base, fontName="Helvetica-Bold", fontSize=18, leading=22)
-    headline_st = ParagraphStyle("headline", parent=base, fontSize=11, leading=14, textColor=accent)
-    small = ParagraphStyle("small", parent=base, fontSize=8.5, leading=11)
-    head_st = ParagraphStyle("head", parent=base, fontName="Helvetica-Bold", fontSize=10.5, leading=13,
-                             textColor=accent, spaceBefore=8)
+    headline_st = ParagraphStyle("headline", parent=base, fontSize=11 * k, leading=14 * k, textColor=accent)
+    small = ParagraphStyle("small", parent=base, fontSize=8.5 * k, leading=11 * k)
+    head_st = ParagraphStyle("head", parent=base, fontName="Helvetica-Bold", fontSize=10.5 * k, leading=13 * k,
+                             textColor=accent, spaceBefore=8 * k)
     bold = ParagraphStyle("bold", parent=base, fontName="Helvetica-Bold")
     right = ParagraphStyle("right", parent=base, alignment=2)
+    tech_st = ParagraphStyle("tech", parent=small, fontName="Helvetica-Oblique", textColor=colors.HexColor("#555F6D"))
+    sub_st = ParagraphStyle("sub", parent=base, fontName="Helvetica-BoldOblique")
+    sub_right = ParagraphStyle("subright", parent=right, fontName="Helvetica-Oblique")
     width = A4[0] - 36 * mm - 12  # margins, minus the frame's 6 pt padding on each side
 
     def P(text, style=base):
@@ -299,18 +330,37 @@ def resume_to_pdf(resume: dict[str, Any], profile: dict[str, Any]) -> bytes:
             block.append(P(" · ".join(value)))
             story += block
         else:
+            def row(left_par, dates_par, indent=0.0):
+                t = Table([[left_par, dates_par]], colWidths=[(width - indent) * 0.74, (width - indent) * 0.26])
+                t.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                                       ("TOPPADDING", (0, 0), (-1, -1), 3 * k), ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+                                       ("VALIGN", (0, 0), (-1, -1), "TOP")]))
+                if indent:
+                    t.hAlign = "RIGHT"
+                return t
+
+            def bullets(lines, indent=10):
+                return ListFlowable([ListItem(P(b), leftIndent=indent) for b in lines], bulletType="bullet",
+                                    start="•", leftIndent=indent, bulletFontSize=8 * k)
+
             for i, e in enumerate(value):
                 left, dates = _entry_head(e)
-                row = Table([[P(left, bold), P(dates, right)]], colWidths=[width * 0.74, width * 0.26])
-                row.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-                                         ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
-                                         ("VALIGN", (0, 0), (-1, -1), "TOP")]))
-                items = [row]
+                head = [row(P(left, bold), P(dates, right))]
+                if e.get("tech"):
+                    head.append(P(e["tech"], tech_st))
                 if e["bullets"]:
-                    items.append(ListFlowable([ListItem(P(b), leftIndent=10) for b in e["bullets"]],
-                                              bulletType="bullet", start="•", leftIndent=10, bulletFontSize=8))
-                # keep the heading with the first entry, and each entry in one piece
-                story.append(KeepTogether(block + items if i == 0 else items))
+                    head.append(bullets(e["bullets"]))
+                chunks = [head]
+                for sub in e.get("subsections", []):
+                    part = [row(P(sub["name"], sub_st), P(sub.get("dates", ""), sub_right), indent=10)]
+                    if sub["bullets"]:
+                        part += [Indenter(left=10), bullets(sub["bullets"]), Indenter(left=-10)]
+                    chunks.append(part)
+                if len(chunks) > 1 and not e["bullets"]:      # keep the role line with its first project
+                    chunks = [chunks[0] + chunks[1]] + chunks[2:]
+                if i == 0:                                     # keep the section heading with the first entry
+                    chunks[0] = block + chunks[0]
+                story += [KeepTogether(c) for c in chunks]
 
     buf = io.BytesIO()
     SimpleDocTemplate(buf, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=15 * mm,
