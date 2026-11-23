@@ -39,3 +39,8 @@ def tailor_chain(models: Models) -> Runnable:
 def cover_letter_chain(models: Models) -> Runnable:
     """CV + job + verified matches + fact rules -> CoverLetter"""
     return _chain(prompts.COVER_SYSTEM, prompts.COVER_USER, schemas.CoverLetter, models, 0.5, "cover_letter")
+
+
+def resume_chain(models: Models) -> Runnable:
+    """complete CV + job -> TailoredResume (selected and rephrased, nothing invented)"""
+    return _chain(prompts.RESUME_SYSTEM, prompts.RESUME_USER, schemas.TailoredResume, models, 0.2, "resume")

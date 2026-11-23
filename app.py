@@ -13,13 +13,14 @@ import streamlit as st
 
 from matcher import config
 from matcher.cover_letter import LENGTHS, fact_check, format_date, letter_to_text, text_to_letter
-from matcher.export import to_docx, to_pdf
+from matcher.export import resume_to_docx, resume_to_pdf, to_docx, to_pdf
 from matcher.germany import CEFR
 from matcher.graph import NODE_LABELS
 from matcher import llm as llm_module
 from matcher.llm import LLMError, friendly_error
 from matcher.pdf_reader import PDFTextError, extract_pdf_text
 from matcher.pipeline import MatcherPipeline, prune_checkpoints, sqlite_checkpointer
+from matcher.resume import SIZES, generate_resume, resume_fact_check, resume_to_text
 from matcher.storage import Storage
 from matcher.tailor import tailor_cv
 
@@ -72,7 +73,8 @@ def ss_default(key: str, value) -> None:
 
 
 for k, v in {"analysis": None, "app_id": None, "jd_text": "", "job_url": "", "letter": None,
-             "letter_text": "", "tailor": None, "uploader_key": 0, "cv_text_used": "", "letter_run": None}.items():
+             "letter_text": "", "tailor": None, "uploader_key": 0, "cv_text_used": "", "letter_run": None,
+             "resume": None, "master_uploader_key": 0}.items():
     ss_default(k, v)
 
 storage = get_storage()
@@ -183,6 +185,14 @@ def sidebar():
 # =============================================================== analyse page
 def cv_section() -> str | None:
     st.subheader("1 · Your CV")
+    master = storage.get_master_cv()
+    if master:
+        st.success(f"Using your **complete CV** from My profile ({len(master['text'])} characters, "
+                   f"updated {master['updated_at'][:10]}).")
+        st.caption("It is used for matching, the tailored resume and the cover letter. Edit it in **My profile**.")
+        with st.expander("Show your complete CV"):
+            st.text(master["text"][:8000])
+        return master["text"]
     active = storage.get_active_cv()
     if active:
         c1, c2 = st.columns([3, 1])
@@ -236,7 +246,7 @@ def run_analysis(cv_text: str, jd_text: str, job_url: str) -> None:
             return
         status.update(label="Analysis complete", state="complete", expanded=False)
     st.session_state.update(analysis=result, jd_text=jd_text, job_url=job_url, letter=None,
-                            letter_text="", tailor=None, cv_text_used=cv_text, letter_run=None)
+                            letter_text="", tailor=None, cv_text_used=cv_text, letter_run=None, resume=None)
     st.session_state.app_id = storage.add_application(result, jd_text, job_url, cv_text)
 
 
@@ -350,8 +360,63 @@ def render_tailoring(a: dict, cv_text: str) -> None:
                 st.caption(s["why"])
 
 
+def render_resume(a: dict, cv_text: str) -> None:
+    st.subheader("4 · Tailored resume")
+    if storage.get_master_cv():
+        st.caption("Built only from your complete CV: the parts that matter for this job, rephrased for it — "
+                   "nothing invented. Every claim is fact-checked against your complete CV.")
+    else:
+        st.info("Tip: add your **complete CV** (everything you have done, any length) in **My profile**. "
+                "Until then the resume is built from your uploaded CV.")
+    profile = storage.get_profile()
+    c1, c2 = st.columns([1, 3])
+    size = c1.radio("Resume length", list(SIZES), format_func=lambda k: SIZES[k]["label"], horizontal=True,
+                    key="resume_size")
+    extra = c2.text_input("Extra instructions for the resume (optional)", key="resume_extra",
+                          placeholder="e.g. emphasise my thesis; leave out the café job")
+    if st.button("🔁 Regenerate resume" if st.session_state.resume else "📄 Build tailored resume",
+                 key="resume_btn"):
+        with st.spinner("Selecting the right parts of your CV and fact-checking them …"):
+            try:
+                run = generate_resume(llm, cv_text, st.session_state.jd_text, a, size, extra)
+            except Exception as exc:
+                st.error(str(friendly_error(exc, llm)))
+                return
+        st.session_state.resume = run
+        if st.session_state.app_id:
+            storage.update_application(st.session_state.app_id, resume_json=run["resume"])
+
+    run = st.session_state.resume
+    if not run:
+        return
+    resume = run["resume"]
+    with st.container(border=True):
+        st.text(resume_to_text(resume, profile))
+    if run.get("rewrites"):
+        st.caption(f"♻️ The fact check found problems in the first draft, so the resume was rebuilt "
+                   f"{run['rewrites']}× automatically.")
+    issues = resume_fact_check(resume, cv_text, a)
+    if issues:
+        with st.container(border=True):
+            st.markdown("**🔎 Fact check — please review before sending:**")
+            for w in issues:
+                st.markdown(f"- ⚠️ {w}")
+            st.caption("Fix it in the DOCX, or click Regenerate.")
+    else:
+        st.success("🔎 Fact check passed: everything in this resume is backed by your CV.")
+    base = safe_filename("Lebenslauf" if resume.get("language") == "de" else "Resume",
+                         profile.get("full_name", ""), a["job"].get("company", ""))
+    d1, d2, d3 = st.columns(3)
+    d1.download_button("⬇️ Resume DOCX", resume_to_docx(resume, profile), f"{base}.docx",
+                       "application/vnd.openxmlformats-officedocument.wordprocessingml.document", key="resume_docx")
+    d2.download_button("⬇️ Resume PDF", resume_to_pdf(resume, profile), f"{base}.pdf", "application/pdf",
+                       key="resume_pdf")
+    d3.download_button("⬇️ Resume TXT", resume_to_text(resume, profile), f"{base}.txt", "text/plain",
+                       key="resume_txt")
+
+
 def render_cover_letter(a: dict, cv_text: str) -> None:
-    st.subheader("4 · Cover letter")
+    st.subheader("5 · Cover letter")
     profile = storage.get_profile()
     allowed = a["cover_letter_eligible"]
     if not allowed:
@@ -477,6 +542,8 @@ def page_analyse() -> None:
         used_cv = st.session_state.cv_text_used or cv_text or ""
         render_tailoring(a, used_cv)
         st.divider()
+        render_resume(a, used_cv)
+        st.divider()
         render_cover_letter(a, used_cv)
 
 
@@ -540,6 +607,9 @@ def page_tracker() -> None:
             for k, c in an.get("categories", {}).items():
                 st.markdown(f"- **{config.CATEGORY_LABELS.get(k, k)}**: {c['score']:.2f} — {c['reason']}")
             st.markdown(f"- **Overall: {an.get('overall', 0):.2f} / 5**")
+        if item.get("resume"):
+            with st.expander("Tailored resume"):
+                st.text(resume_to_text(item["resume"], storage.get_profile()))
         if item["cover_letter"]:
             with st.expander("Cover letter"):
                 st.text(letter_to_text(item["cover_letter"]))
@@ -547,7 +617,9 @@ def page_tracker() -> None:
         if b1.button("↩️ Load into analyser"):
             st.session_state.update(analysis=an, app_id=item["id"], jd_text=item["jd_text"] or "",
                                     job_url=item["job_url"] or "", letter=item["cover_letter"], tailor=None,
-                                    cv_text_used=item.get("cv_text") or "", letter_run=None)
+                                    cv_text_used=item.get("cv_text") or "", letter_run=None,
+                                    resume={"resume": item["resume"], "issues": [], "rewrites": 0}
+                                    if item.get("resume") else None)
             st.session_state.letter_text = letter_to_text(item["cover_letter"]) if item["cover_letter"] else ""
             st.session_state["letter_editor"] = st.session_state.letter_text
             st.switch_page(PAGES["analyse"])
@@ -591,7 +663,46 @@ def page_profile() -> None:
             storage.save_profile(p)
             st.success("Profile saved.")
 
-    st.subheader("Saved CV")
+    st.subheader("Complete CV (everything about you)")
+    st.caption("Write or paste EVERYTHING here — every job, internship, project, course, tool, achievement and "
+               "number, at any length. For each job the app picks the relevant parts into a tailored resume "
+               "and cover letter, and never adds anything that isn't written here. "
+               "When this is filled in, it is used instead of the uploaded CV.")
+    master = storage.get_master_cv()
+    source = st.file_uploader("Fill from a file (PDF or TXT) — replaces the text below", type=["pdf", "txt"],
+                              key=f"master_up{st.session_state.master_uploader_key}")
+    if source is not None:
+        try:
+            text = (extract_pdf_text(source.getvalue()) if source.name.lower().endswith(".pdf")
+                    else source.getvalue().decode("utf-8", errors="replace"))
+        except PDFTextError as exc:
+            st.error(str(exc))
+        else:
+            storage.save_master_cv(text)
+            st.session_state.master_uploader_key += 1
+            st.session_state.pop("master_cv_text", None)
+            st.rerun()
+    ss_default("master_cv_text", master["text"] if master else "")
+    text = st.text_area("Complete CV", key="master_cv_text", height=420,
+                        placeholder="EXPERIENCE\nData Analyst Intern, Acme GmbH, Berlin (04/2023 – 09/2023)\n"
+                                    "- Built Python ETL scripts …\n\nPROJECTS\n…\n\nEDUCATION\n…\n\n"
+                                    "SKILLS\n…\n\nLANGUAGES\nEnglish (C1), German (A2)")
+    b1, b2, _ = st.columns([1, 1, 3])
+    if b1.button("💾 Save complete CV", type="primary"):
+        if len(text.strip()) < 100:
+            st.error("That is very short — add your experience, projects, education and skills.")
+        else:
+            storage.save_master_cv(text)
+            st.success("Complete CV saved.")
+            st.rerun()
+    if master and b2.button("Remove complete CV"):
+        storage.clear_master_cv()
+        st.session_state.pop("master_cv_text", None)
+        st.rerun()
+    if master:
+        st.caption(f"Saved: {len(master['text'])} characters · updated {master['updated_at'][:10]}")
+
+    st.subheader("Uploaded CV (PDF)")
     active = storage.get_active_cv()
     if active:
         st.write(f"**{active['filename']}** · {len(active['text'])} characters · uploaded {active['uploaded_at'][:10]}")

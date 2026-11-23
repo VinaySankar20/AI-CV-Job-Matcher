@@ -155,3 +155,165 @@ def _build_pdf(letter: dict[str, Any], profile: dict[str, Any], recipient: dict[
                       bottomMargin=15 * mm, title=letter.get("subject", "Cover letter"),
                       author=profile.get("full_name", "")).build(story)
     return buf.getvalue()
+
+
+# =========================================================================== tailored resume
+def _contact_line(profile: dict[str, Any]) -> str:
+    keys = ("street", "postal_city", "phone", "email")
+    return " · ".join(str(profile.get(k)).strip() for k in keys if str(profile.get(k) or "").strip())
+
+
+def _entry_head(e: dict[str, Any]) -> tuple[str, str]:
+    """(left: 'Title — Organisation, Location', right: dates)"""
+    org = ", ".join(x for x in (e.get("organisation"), e.get("location")) if x)
+    return " — ".join(x for x in (e.get("title"), org) if x), e.get("dates", "")
+
+
+def resume_to_docx(resume: dict[str, Any], profile: dict[str, Any]) -> bytes:
+    from docx import Document
+    from docx.enum.text import WD_TAB_ALIGNMENT
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Mm, Pt, RGBColor
+
+    from .resume import HEADINGS, SECTION_ORDER
+
+    h = HEADINGS.get(resume.get("language", "en"), HEADINGS["en"])
+    doc = Document()
+    sec = doc.sections[0]
+    sec.page_height, sec.page_width = Mm(297), Mm(210)
+    sec.top_margin = sec.bottom_margin = Mm(15)
+    sec.left_margin = sec.right_margin = Mm(18)
+    text_width = Mm(210 - 36)
+    normal = doc.styles["Normal"]
+    normal.font.name, normal.font.size = "Arial", Pt(10)
+    normal.paragraph_format.space_after = Pt(0)
+    normal.paragraph_format.line_spacing = 1.1
+
+    def para(text="", bold=False, size=None, italic=False, space_after=0, color=None):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(space_after)
+        if text:
+            run = p.add_run(text)
+            run.bold, run.italic = bold, italic
+            if size:
+                run.font.size = Pt(size)
+            if color:
+                run.font.color.rgb = RGBColor(*color)
+        return p
+
+    def heading(text):
+        p = para(text.upper(), bold=True, size=10.5, space_after=3, color=(0x1F, 0x3A, 0x5F))
+        p.paragraph_format.space_before = Pt(9)
+        border = OxmlElement("w:pBdr")
+        bottom = OxmlElement("w:bottom")
+        for k, v in (("w:val", "single"), ("w:sz", "6"), ("w:space", "1"), ("w:color", "1F3A5F")):
+            bottom.set(qn(k), v)
+        border.append(bottom)
+        p._p.get_or_add_pPr().append(border)
+
+    para(profile.get("full_name", ""), bold=True, size=18)
+    if resume.get("headline"):
+        para(resume["headline"], size=11, color=(0x1F, 0x3A, 0x5F))
+    if _contact_line(profile):
+        para(_contact_line(profile), size=9)
+
+    for key in SECTION_ORDER:
+        value = resume.get(key)
+        if not value:
+            continue
+        heading(h[key])
+        if key == "summary":
+            para(value)
+        elif key == "skills":
+            for g in value:
+                p = para()
+                if g["category"]:
+                    p.add_run(f"{g['category']}: ").bold = True
+                p.add_run(", ".join(g["items"]))
+        elif key in ("languages", "certifications"):
+            para(" · ".join(value))
+        else:
+            for e in value:
+                left, right = _entry_head(e)
+                p = para(space_after=1)
+                p.paragraph_format.space_before = Pt(4)
+                p.paragraph_format.tab_stops.add_tab_stop(text_width, WD_TAB_ALIGNMENT.RIGHT)
+                p.add_run(left).bold = True
+                if right:
+                    p.add_run(f"\t{right}")
+                for b in e["bullets"]:
+                    doc.add_paragraph(b, style="List Bullet").paragraph_format.space_after = Pt(0)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def resume_to_pdf(resume: dict[str, Any], profile: dict[str, Any]) -> bytes:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (HRFlowable, KeepTogether, ListFlowable, ListItem, Paragraph,
+                                    SimpleDocTemplate, Table, TableStyle)
+
+    from .resume import HEADINGS, SECTION_ORDER
+
+    h = HEADINGS.get(resume.get("language", "en"), HEADINGS["en"])
+    accent = colors.HexColor("#1F3A5F")
+    base = ParagraphStyle("base", fontName="Helvetica", fontSize=9.5, leading=12.5)
+    name_st = ParagraphStyle("name", parent=base, fontName="Helvetica-Bold", fontSize=18, leading=22)
+    headline_st = ParagraphStyle("headline", parent=base, fontSize=11, leading=14, textColor=accent)
+    small = ParagraphStyle("small", parent=base, fontSize=8.5, leading=11)
+    head_st = ParagraphStyle("head", parent=base, fontName="Helvetica-Bold", fontSize=10.5, leading=13,
+                             textColor=accent, spaceBefore=8)
+    bold = ParagraphStyle("bold", parent=base, fontName="Helvetica-Bold")
+    right = ParagraphStyle("right", parent=base, alignment=2)
+    width = A4[0] - 36 * mm - 12  # margins, minus the frame's 6 pt padding on each side
+
+    def P(text, style=base):
+        return Paragraph(escape(text or ""), style)
+
+    story = [P(profile.get("full_name", ""), name_st)]
+    if resume.get("headline"):
+        story.append(P(resume["headline"], headline_st))
+    if _contact_line(profile):
+        story.append(P(_contact_line(profile), small))
+
+    for key in SECTION_ORDER:
+        value = resume.get(key)
+        if not value:
+            continue
+        block = [P(h[key].upper(), head_st), HRFlowable(width="100%", thickness=0.6, color=accent,
+                                                         spaceBefore=1, spaceAfter=3)]
+        if key == "summary":
+            block.append(P(value))
+            story += block
+        elif key == "skills":
+            for g in value:
+                label = f"<b>{escape(g['category'])}:</b> " if g["category"] else ""
+                block.append(Paragraph(label + escape(", ".join(g["items"])), base))
+            story += block
+        elif key in ("languages", "certifications"):
+            block.append(P(" · ".join(value)))
+            story += block
+        else:
+            for i, e in enumerate(value):
+                left, dates = _entry_head(e)
+                row = Table([[P(left, bold), P(dates, right)]], colWidths=[width * 0.74, width * 0.26])
+                row.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                                         ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+                                         ("VALIGN", (0, 0), (-1, -1), "TOP")]))
+                items = [row]
+                if e["bullets"]:
+                    items.append(ListFlowable([ListItem(P(b), leftIndent=10) for b in e["bullets"]],
+                                              bulletType="bullet", start="•", leftIndent=10, bulletFontSize=8))
+                # keep the heading with the first entry, and each entry in one piece
+                story.append(KeepTogether(block + items if i == 0 else items))
+
+    buf = io.BytesIO()
+    SimpleDocTemplate(buf, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=15 * mm,
+                      bottomMargin=15 * mm, title=resume.get("headline") or "Resume",
+                      author=profile.get("full_name", "")).build(story)
+    return buf.getvalue()

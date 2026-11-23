@@ -19,9 +19,11 @@ conditional routing, a human-in-the-loop pause, a self-correcting cover-letter l
 | ⏸️ | **Human-in-the-loop**: the graph pauses after scoring and writes the letter only when you say so |
 | 🔀 | **Model picker**: local Ollama by default, or OpenAI / Anthropic / OpenRouter with your own API key |
 | 🧭 | **Pipeline trace**: a local log of every step (node, duration, result) — no cloud tracing |
+| 📚 | **Complete CV**: write down everything you have done once (any length) — it becomes the single source of truth |
+| 📄 | **Tailored resume**: for each job, the most relevant parts of your complete CV, rephrased for the job, 1 or 2 pages, fact-checked (employers, dates, numbers, skills, language levels) and rebuilt automatically if something isn't backed; export **DOCX / PDF / TXT** |
 | ✍️ | **CV tailoring**: rewrites of your existing CV lines for the specific job (nothing invented) |
 | ✉️ | **Cover letter**: formal/modern tone, short/standard/detailed, extra instructions, edit in the app, export **DOCX / PDF (DIN 5008)** / TXT |
-| 💾 | **Saved CV**: upload once, then just paste job ads |
+| 💾 | **Saved CV**: upload once (or use the complete CV), then just paste job ads |
 | 📋 | **Application tracker**: every analysis saved (SQLite) with status, notes and CSV export |
 
 ### How the score works
@@ -106,8 +108,10 @@ or double-click **`run.bat`**. The app opens at http://localhost:8501.
 
 First use:
 1. **My profile** → name, address, place, German level, student status, hours you already work elsewhere, availability.
-2. **Analyse** → upload your CV (PDF, text-based) once, paste a job ad, click **Analyse match**.
-3. Check the breakdown, Germany checks and requirements → **Suggest CV rewrites** → **Generate cover letter** → download.
+   Then fill in **Complete CV**: everything about you — every job, project, course, tool and result. More detail
+   means better tailored resumes; nothing outside this text will ever be added.
+2. **Analyse** → paste a job ad, click **Analyse match** (without a complete CV, upload your CV as a text-based PDF once).
+3. Check the breakdown, Germany checks and requirements → **Build tailored resume** → **Write cover letter** → download.
 4. **Tracker** → update status (applied / interview / …) and notes; export CSV.
 
 The first analysis takes longer while the model loads into memory.
@@ -162,8 +166,9 @@ cv-job-matcher/
 │   ├── textutils.py       # keyword matching, chunking, cosine similarity
 │   ├── scorer.py          # scoring rules (pure Python, no LLM calls)
 │   ├── tailor.py          # CV rewrite suggestions
+│   ├── resume.py          # tailored resume from the complete CV: limits, fact check, rewrite
 │   ├── cover_letter.py    # letter inputs, clean-up and fact check
-│   ├── export.py          # DOCX / PDF in DIN 5008 layout
+│   ├── export.py          # DOCX / PDF: letter in DIN 5008 layout, resume
 │   └── storage.py         # SQLite: profile, CV, applications
 ├── tests/
 └── data/                  # your local databases (git-ignored)

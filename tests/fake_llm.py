@@ -136,6 +136,31 @@ _EVAL = {
 }
 
 
+def honest_resume() -> dict:
+    """A tailored resume that only uses facts from SAMPLE_CV (one bullet too many, to test trimming)."""
+    return {
+        "headline": "Data Science Student · Python, SQL, Power BI",
+        "summary": "Data Science master's student with hands-on Python ETL, SQL and Power BI experience.",
+        "skills": [{"category": "Programming", "items": ["Python", "SQL", "pandas"]},
+                   {"category": "Data & ML", "items": ["PyTorch", "OpenCV", "Power BI"]},
+                   {"category": "Tools", "items": ["Git", "Docker"]}],
+        "experience": [{"title": "Data Analyst Intern", "organisation": "Acme GmbH", "location": "",
+                        "dates": "2023", "bullets": [
+                            "Built Python ETL scripts with pandas to clean sales data",
+                            "Created Power BI dashboards for the sales team",
+                            "Wrote SQL queries on PostgreSQL databases",
+                            "Cleaned sales data with pandas"]}],
+        "projects": [{"title": "CNN image classifier", "organisation": "", "location": "", "dates": "",
+                      "bullets": ["Trained a CNN image classifier in PyTorch reaching 92% accuracy"]}],
+        "education": [{"title": "M.Sc. Data Science", "organisation": "TU Berlin", "location": "",
+                       "dates": "since 10/2025", "bullets": []},
+                      {"title": "B.Tech. Computer Science", "organisation": "University of Kerala",
+                       "location": "", "dates": "2019-2023", "bullets": []}],
+        "languages": ["English (C1)", "German (A2)", "Malayalam (native)"],
+        "certifications": [],
+    }
+
+
 def _which(text: str) -> str:
     return "FinanzPartner" if "FinanzPartner" in text else "DataCorp"
 
@@ -177,6 +202,8 @@ class FakeModels:
                                "Para three about availability."],
                 "closing": "Mit freundlichen Grüßen" if german else "Kind regards",
             }
+        if schema is schemas.TailoredResume:
+            return honest_resume()
         raise AssertionError(f"unexpected schema {schema}")
 
     def structured(self, schema, temperature: float = 0.0):

@@ -66,6 +66,22 @@ def test_full_flow(app):
     assert app.get_application(app.list_applications()[0]["id"])["cover_letter"]["subject"]
 
 
+def test_complete_cv_drives_analysis_and_resume(app):
+    app.save_master_cv(SAMPLE_CV + "\nCERTIFICATIONS\nAWS Cloud Practitioner (2024)")
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    assert any("complete CV" in s.value for s in at.success)
+    at.text_area[0].set_value(SAMPLE_JD_EN)
+    next(b for b in at.button if "Analyse match" in b.label).click().run()
+    assert not at.exception
+    stored = app.get_application(app.list_applications()[0]["id"])
+    assert "AWS Cloud Practitioner" in stored["cv_text"]                    # scored on the complete CV
+
+    next(b for b in at.button if "Build tailored resume" in b.label).click().run()
+    assert not at.exception
+    assert any("everything in this resume is backed" in s.value for s in at.success)
+    assert app.get_application(stored["id"])["resume"]["experience"][0]["organisation"] == "Acme GmbH"
+
+
 @pytest.mark.parametrize("page", ["tracker", "profile"])
 def test_other_pages_render(app, page, monkeypatch):
     at = AppTest.from_file(APP, default_timeout=30).run()

@@ -147,3 +147,47 @@ CV:
 \"\"\"
 {cv}
 \"\"\""""
+
+# ---------------------------------------------------------------- 5. tailored resume
+RESUME_SYSTEM = """You build job-specific resumes (Lebenslauf) for the German job market from a candidate's
+COMPLETE CV — a long document with everything they have done. You SELECT what matters for the job and
+rephrase it; you never add anything that is not in the complete CV. You write in {language}.
+Answer with JSON only."""
+
+RESUME_USER = """Build a tailored resume for this job from the COMPLETE CV below.
+
+Size limits ({size}):
+- "summary": max {summary_words} words, 2-3 sentences on why the candidate fits THIS job.
+- "experience": the {max_entries} most relevant jobs/internships/working-student roles, most relevant first
+  (if relevance is similar, newest first). Max {max_bullets} bullets each.
+- "projects": the {max_projects} most relevant projects, max {max_bullets} bullets each. [] if none fit.
+- "skills": 3-5 groups (e.g. Programming, Data & ML, Tools), only skills that matter for this job.
+- "education": every degree in the complete CV, newest first; bullets only for job-relevant
+  thesis/courses (max 2).
+- "languages": every language with the level exactly as written in the complete CV.
+- "certifications": only job-relevant ones from the complete CV, else [].
+
+STRICT FACT RULES — breaking any of these makes the resume unusable:
+- Every bullet must be a rephrasing of something in the complete CV. Start with a strong verb.
+- Copy organisation names, job titles, dates and grades exactly. Never change a date.
+- Never invent numbers, percentages, team sizes, tools, employers or results. Keep numbers that are there.
+- Use the job's keywords only where the complete CV supports them.
+- NEVER mention any of these (the complete CV does not show them): {do_not_claim}
+- No name, address, phone, email or photo — the app adds the header itself.
+- Leave out anything irrelevant to this job rather than padding.
+
+JOB: {title} at {company}
+JOB MUST-HAVES: {must}
+JOB KEYWORDS: {keywords}
+
+{extra}
+
+JOB DESCRIPTION:
+\"\"\"
+{jd}
+\"\"\"
+
+COMPLETE CV:
+\"\"\"
+{cv}
+\"\"\""""

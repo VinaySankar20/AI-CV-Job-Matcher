@@ -83,6 +83,7 @@ CLOUD_MAX_TOKENS = 4096   # upper limit for one answer from a cloud model
 # LangGraph loop limits
 MAX_RECHECKS = 1          # how often to ask again for requirements the model skipped
 MAX_LETTER_REWRITES = 2   # automatic rewrites when the fact check finds unsupported claims
+MAX_RESUME_REWRITES = 1   # automatic rewrites of the tailored resume after a failed fact check
 CHECKPOINT_DB = DATA_DIR / "graph_checkpoints.db"   # saved graph runs (pause / resume)
 
 APPLICATION_STATUSES = ["analysed", "applied", "interview", "offer", "rejected", "not applying"]

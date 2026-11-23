@@ -82,3 +82,28 @@ class CoverLetter(BaseModel):
     salutation: str
     paragraphs: list[str]
     closing: str
+
+
+# ---------------------------------------------------------------- 5. tailored resume
+class ResumeEntry(BaseModel):
+    title: str = Field(description="Role, degree or project name, as in the complete CV")
+    organisation: str = Field(description="Employer / university / client copied exactly, or empty")
+    location: str
+    dates: str = Field(description="Dates copied exactly from the complete CV, or empty")
+    bullets: list[str]
+
+
+class SkillGroup(BaseModel):
+    category: str
+    items: list[str]
+
+
+class TailoredResume(BaseModel):
+    headline: str = Field(description="Short professional title for this application")
+    summary: str
+    skills: list[SkillGroup]
+    experience: list[ResumeEntry]
+    projects: list[ResumeEntry]
+    education: list[ResumeEntry]
+    languages: list[str]
+    certifications: list[str]

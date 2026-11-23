@@ -43,8 +43,9 @@ class Storage:
         with self._conn() as c:
             c.executescript(_SCHEMA)
             columns = {row["name"] for row in c.execute("PRAGMA table_info(applications)")}
-            if "cv_text" not in columns:  # databases from before the CV was stored per application
-                c.execute("ALTER TABLE applications ADD COLUMN cv_text TEXT")
+            for column in ("cv_text", "resume_json"):  # columns added after the first release
+                if column not in columns:
+                    c.execute(f"ALTER TABLE applications ADD COLUMN {column} TEXT")
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -101,6 +102,18 @@ class Storage:
         with self._conn() as c:
             c.execute("UPDATE cvs SET is_active=0")
 
+    # ---------------- complete ("master") CV: everything about you, the source for tailored resumes
+    def get_master_cv(self) -> dict[str, Any] | None:
+        master = self.get_setting("master_cv")
+        return master if master and str(master.get("text") or "").strip() else None
+
+    def save_master_cv(self, text: str) -> None:
+        self.set_setting("master_cv", {"text": text.strip(), "updated_at": self._now()})
+
+    def clear_master_cv(self) -> None:
+        with self._conn() as c:
+            c.execute("DELETE FROM settings WHERE key='master_cv'")
+
     # ---------------- applications
     def add_application(self, analysis: dict[str, Any], jd_text: str, job_url: str = "",
                         cv_text: str = "") -> int:
@@ -127,12 +140,14 @@ class Storage:
         return {i for i in ids if i}
 
     def update_application(self, app_id: int, **fields: Any) -> None:
-        allowed = {"company", "role", "location", "job_url", "status", "notes", "cover_letter_json", "overall_score"}
+        allowed = {"company", "role", "location", "job_url", "status", "notes", "cover_letter_json", "resume_json",
+                   "overall_score"}
         fields = {k: v for k, v in fields.items() if k in allowed}
         if not fields:
             return
-        if "cover_letter_json" in fields and not isinstance(fields["cover_letter_json"], str):
-            fields["cover_letter_json"] = json.dumps(fields["cover_letter_json"], ensure_ascii=False)
+        for key in ("cover_letter_json", "resume_json"):
+            if key in fields and not isinstance(fields[key], str):
+                fields[key] = json.dumps(fields[key], ensure_ascii=False)
         sets = ", ".join(f"{k}=?" for k in fields) + ", updated_at=?"
         with self._conn() as c:
             c.execute(f"UPDATE applications SET {sets} WHERE id=?", (*fields.values(), self._now(), app_id))
@@ -152,6 +167,7 @@ class Storage:
         d = dict(row)
         d["analysis"] = json.loads(d.pop("analysis_json") or "{}")
         d["cover_letter"] = json.loads(d.pop("cover_letter_json") or "null")
+        d["resume"] = json.loads(d.pop("resume_json") or "null")
         return d
 
     def delete_application(self, app_id: int) -> None:
